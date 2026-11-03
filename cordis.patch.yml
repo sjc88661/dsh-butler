@@ -1,0 +1,19 @@
+# 管家（@dsh-external/dsh-butler）bundle 补丁层。
+#
+# 这里只声明「装上这个 bundle 时加载哪一行」；部署相关的覆盖（模型、预算、
+# 数据目录等）请写在 profile 自己的 cordis.patch.yml 层，按 id `dsh-butler`
+# 覆写即可（覆写会整体替换 config，需给全）。
+#
+# 默认值说明：
+# - timeZone/profileChars 与 0.0.22 灰度部署一致，保证升级前后行为不变。
+# - taskMax* / contextTokens 沿用灰度期数值；日常使用可在 profile 层放宽。
+- insert:
+    - id: dsh-butler
+      name: '@dsh-external/dsh-butler'
+      config:
+        timeZone: 'Asia/Shanghai'
+        profileChars: 2000
+        taskMaxRequests: 6
+        taskMaxTokens: 160000
+        taskMaxMinutes: 3
+        contextTokens: 64000

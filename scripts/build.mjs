@@ -45,9 +45,14 @@ try {
     run('host typecheck', tools.tsc, ['-p', 'tsconfig.json', '--noEmit'])
     run('client typecheck', tools.tsc, ['-p', 'tsconfig.client.json'])
     if (!flags.has('--typecheck')) {
-      run('host emit', tools.tsc, ['-p', 'tsconfig.json'])
+      // Both halves are bundled by tsdown: the Host bundle must not import
+      // dsh packages at runtime (a linked workspace package resolves modules
+      // from its own tree, not the profile's node_modules). tsc therefore only
+      // emits type declarations; lib/index.js, lib/channels.js,
+      // lib/reminder-delivery.js and lib/client.js all come from tsdown.
+      run('host declarations', tools.tsc, ['-p', 'tsconfig.json', '--emitDeclarationOnly'])
       run('client declarations', tools.tsc, ['-p', 'tsconfig.client.json', '--noEmit', 'false', '--declaration', '--emitDeclarationOnly', '--rootDir', 'src', '--outDir', 'lib/types'])
-      run('client bundle', tools.tsdown, ['-c', 'tsdown.config.mjs', '--logLevel', 'warn'])
+      run('bundles (host + client)', tools.tsdown, ['-c', 'tsdown.config.mjs', '--logLevel', 'warn'])
       if (!flags.has('--no-pack')) {
         const npm = join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')
         if (!existsSync(npm)) throw new Error('npm pack CLI missing beside pinned Node; use --no-pack for a local build')

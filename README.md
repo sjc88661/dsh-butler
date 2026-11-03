@@ -4,6 +4,23 @@
 
 版本 0.0.22+release.1（候选，未部署正式宿主）：在 0.0.21+nature.1 基础上完成发布收口——存储保留/压缩与日志自愈、试用限额层产品化（可选 `trial` 配置、真实请求路径拦截、显式降级）、Windows junction/PDF 守卫修复，以及部署/回滚/灰度方案。候选验收见 [ACCEPTANCE.md](../diagnostics/release-0.0.22-20261027/ACCEPTANCE.md)，真实宿主部署与灰度步骤见 [发布计划](../docs/superpowers/plans/2026-10-27-butler-release-0.0.22-plan.md)。
 
+## 0.1.0 官方插件化（进行中）
+
+0.1.0 起管家以**官方 DSH bundle** 形态分发，不再用手写 `file://` Loader 行注入：
+
+- 包自带 `cordis.patch.yml`（`dsh.bundle.patch`）、`locale/zh.json` + `locale/en.json`（`meta.title/description`）、原创 `icon.svg`；`exports` 暴露 `./locale/*.json` 与 `./icon`，插件页因此能看到「管家」的名称、描述与图标。
+- 安装走 `plugin_manager` 的 `install_bundle`；本机以 `link:` 方式链到工作区 `E:\opendots\dsh-butler`。重建 `lib/` 后刷新页面即可加载新的浏览器代码；Host 侧的新 JS 模块代需要重启宿主进程（官方说明：替换已安装包要求重启）。
+- Host 与 Client 两半都由 tsdown 打包：Host bundle 在构建期内联 `@deepseek-ai/schemastery`，因此运行时不依赖 dsh 自带包（工作区 link 的模块解析看不到 profile 的 `node_modules`）。仅 `@deepseek-ai/dsh-agent` 的动态 import 保留为运行时可选路径，与旧实现一致，后续步骤再收敛。
+- 回滚：profile `cordis.patch.yml` 的 `dsh-butler-official 0.1.0` 段停用了旧手注入行 `dsh-butler-0.0.22`；删除该段并移除 bundle 即可回到 0.0.22 形态。
+
+```powershell
+# 构建（只编译打包，不生成 tgz）
+$env:DSH_PROFILE_DIR = 'C:\Users\申俊超\.dsh\profiles\desktop'
+node scripts/build.mjs --no-pack
+# 安装（首次）/ 重新加载（禁用再启用 bundle，或重启宿主）
+#   plugin_manager install_bundle  target=E:\opendots\dsh-butler
+```
+
 ## 0.0.22 发布说明（release.1）
 
 本版本是候选发布包，**没有部署到任何真实宿主**；本文档其他章节中的版本描述与验收记录是历史批次的证据，不代表 0.0.22 已上线。
@@ -244,17 +261,20 @@ profile 保留少量稳定偏好和重要边界，受管稳定偏好最多 12 �
 
 旧记录仅在位置与时间可靠匹配时迁移，保留原任务归属和历史估价；无法对应的旧记录保留并报告可能重叠。未知 provider/model 不计价。费用使用仓库保存的价目版本，未在本轮联网更新；它是估价，预算预留、未知用量和提供方账单分别报告。
 
-## 构建与注入
+## 构建与安装
 
 ```powershell
 $env:DSH_CHECKOUT = 'C:\Users\申俊超\dsh-harness'
+$env:DSH_PROFILE_DIR = 'C:\Users\申俊超\.dsh\profiles\desktop'
 node scripts/build.mjs --check     # 只检查版本和依赖，不修改它们
 node --test tests/*.test.mjs      # 本地回归测试，不调用模型
-node scripts/build.mjs           # 检查、编译、界面打包、离线 npm pack
+node scripts/build.mjs --no-pack  # 类型检查、声明生成、Host/Client 打包
+node scripts/build.mjs           # 同上，再加离线 npm pack（发布用 tgz）
 ```
 
 `toolchain.lock.json` 固定 Node 24.15.0、TypeScript 6.0.3、tsdown 0.22.2。
 编译器和打包器从已准备好的 DSH_CHECKOUT 解析；缺失或版本不符就停止并给出原因。
+Host bundle 需要把 `@deepseek-ai/schemastery` 内联进来：优先用 `DSH_PROFILE_DIR` 指向的已安装 profile 解析，其次用 `DSH_CHECKOUT`；两者都找不到时构建会明确失败。
 构建不安装依赖、不删除或重建 junction。`scripts/build.sh` 仅保留旧注入器的启动兼容层。
 构建同时生成 host/client 类型声明并检查干净目录的公开导出目标；类型面向已配置 DSH 类型别名的宿主开发环境，不是脱离宿主的通用 npm SDK。
 

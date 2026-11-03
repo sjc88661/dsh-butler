@@ -1,23 +1,18 @@
 {
   "name": "@dsh-external/dsh-butler",
-  "version": "0.0.22+release.1",
-  "description": "管家模式：个人助理内核（长期记忆 + 任务账本 + 证据守卫 + 资料版本 + 可加装技能包）",
+  "version": "0.1.0",
+  "description": "管家：个人助理内核（长期记忆 + 任务账本 + 证据守卫 + 资料版本 + 可加装能力包）",
   "private": true,
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
   "files": [
-    "lib"
+    "lib",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
   ],
   "license": "BSD-3-Clause",
-  "peerDependencies": {
-    "@deepseek-ai/dsh-agent": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
-    "cordis": ">=4.0.0-rc <5",
-    "@deepseek-ai/schemastery": "^3.18.2",
-    "@deepseek-ai/dsh-client-ui-slots": ">=0.0.1-rc <2"
-  },
   "devDependencies": {
     "@types/node": "^24.13.3",
     "typescript": "6.0.3",
@@ -48,15 +43,20 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
+      "platform": "web",
+      "immediately": true,
       "inject": [
-        "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-layout"
-      ],
-      "platform": "web"
+      ]
     }
   }
 }

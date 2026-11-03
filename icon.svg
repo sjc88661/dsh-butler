@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="管家">
+  <!-- 管家图标：墨青底色 + 服务铃。原创造型，无第三方素材。 -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#2E6B66"/>
+  <path d="M32 13.6a12.6 12.6 0 0 0-12.6 12.6v6.1l-3.2 6.8a1.5 1.5 0 0 0 1.4 2.1h28.8a1.5 1.5 0 0 0 1.4-2.1l-3.2-6.8v-6.1A12.6 12.6 0 0 0 32 13.6Z" fill="#F5F7F4"/>
+  <rect x="23.4" y="42.4" width="17.2" height="3.4" rx="1.7" fill="#F5F7F4"/>
+  <circle cx="32" cy="51.2" r="3.2" fill="#F5F7F4"/>
+</svg>
