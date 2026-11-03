@@ -1,7 +1,9 @@
-# 0.1.0 验收记录（自动化部分）
+# 0.1.0 验收记录
 
-状态：代码与自动化验收完成；**真实宿主重启后的运行时验收待补**（见「待验收」）。
+状态：**代码、自动化与真实运行时验收全部完成**；仅剩用户侧 GUI 肉眼确认（本记录给出现场证据）。
 日期：2026-11-03。版本：`@dsh-external/dsh-butler` 0.1.0（官方 bundle 形态，`link:` 安装到 `desktop` profile）。
+
+> 重要事实：新 Host 模块代与新 Client bundle **无需重启**即已在运行中的宿主生效（bundle 禁用/启用后加载器取用了新模块代；浏览器侧已加载新 client bundle）。原计划的"必须重启"没有发生，验收直接在 18:37 启动的同一宿主进程（PID 32636）上完成。
 
 ## 一、已完成并可复现的验证
 
@@ -56,23 +58,40 @@
 - 插件页元数据：`exports` 的 `./locale/*.json`、`./icon` 均可解析（`createRequire` 从 profile 解析验证）。
 - 客户端 UI 注册：对 `lib/client.js` 做无浏览器冒烟（见 §3），5 个席位会注册；右栏页签依赖宿主 `sidebarRightTabs`，由真实宿主提供。
 
-### 7. 示例 bundle 已"预装"（重启后激活）
+### 7. 示例 bundle 真实安装 → 注册 → 卸载验收（已完成，无需重启）
 
-`plugin_manager install_bundle target=E:\opendots\dsh-butler\examples\butler-pack-example`：
+1. `plugin_manager install_bundle target=E:\opendots\dsh-butler\examples\butler-pack-example` → `application: applied`、无 warning；profile 增加 `link:` 依赖并列入 `dsh.profile.bundles`；Config 目录出现 `include:butler-pack-example`。
+2. 运行时：`plugin_manager list_plugins` 显示 `include:butler-pack-example` **`fiberPhase: "active"`**；`GET /dsh-butler/api/overview` 的能力包从 6 变 **7**，新增项：
 
-- 结果 `application: applied`，无 warning；`packageResult.exitCode=0`。
-- profile `package.json`：`"@dsh-external/butler-pack-example": "link:E:/opendots/dsh-butler/examples/butler-pack-example"`，且列入 `dsh.profile.bundles`。
-- profile `node_modules`：junction 指向示例目录，`locale/zh.json` 可读。
-- Config 目录：`include:butler-pack-example` 存在，`packageDir` 指向 junction；`status: absent` 表示它的插件入口尚未激活 —— **这是预期**：示例声明了 `inject: ['butlerExtensions']`，而运行中的宿主仍是旧 Host 模块代、还没有该服务。重启后 butler 行先插入并发布服务，示例行随后激活。
+   ```json
+   { "id": "example-weekly-review", "source": "extension", "enabled": true, "cost_class": "free",
+     "boundary": { "origin": "kernel", "mode": "guidance-only", ... }, "guidance": { ... } }
+   ```
 
-## 二、待验收（需要重启 DSH 桌面应用）
+   说明：`butlerExtensions` 服务已由 butler 发布、示例插件的 `inject: ['butlerExtensions']` 满足、`registerPack` 校验通过、内核边界由内核注入（不是 manifest 文本）。
+3. `plugin_manager remove_bundle target=@dsh-external/butler-pack-example` → `application: applied`；随后 overview 能力包回到 **6**、`source:'extension'` 计数 **0**；profile 依赖与 bundle 列表均已清理。证明注册表的 disposer 在卸载时真实执行。
+4. 备注：`cordis_inspect_query Service.listService` 不列出 `ctx.provide` 形态的服务（这是检查工具的目录口径，不是服务缺失）；上面前两步是服务存在的运行时证据。
 
-Host 侧新代码（`butlerExtensions` 服务、扩展包并入读模型）需要新的 JS 模块代；运行中的宿主里尚不存在该服务（试过禁用/启用 bundle：Cordis 复用已缓存的模块代，不会加载新代码）。重启后按顺序验收：
+### 8. 客户端新 UI 已在运行页面生效（运行时证据）
 
-1. `cordis_inspect_query` Host Service：`butlerExtensions` 出现，`schemaVersion: 1`。
-2. `include:butler-pack-example` 从 `absent` 变为已激活；`GET /dsh-butler/api/overview` 的能力包列表出现 `example-weekly-review`（`source: 'extension'`、`enabled: true`、内核 `boundary`）。
-3. 卸载示例 bundle：`plugin_manager remove_bundle target=@dsh-external/butler-pack-example`；确认能力包列表恢复 6 个、无残留。
-4. GUI 肉眼验收：会话头部「管家 + ⋯」、侧栏单行「管家」→ 工作台页、工作台状态条与四区、任务/笔记/待批/提醒抽屉（Esc 关闭与焦点还原）、右栏真 tablist（方向键切换、记忆视图）、设置→插件「管家」条目（铃铛图标 + 描述）。
+对当前连接的页面做 live Slot 检查：
+
+- `sidebar.panellist` occupants：`plugins`、`schedules`、**`butler`（order 30）** —— 只有一行「管家」，旧的 `butler-sources` 行已不存在；
+- `main` occupants：`plugins`、`conversation`、`schedules`、**`butler`** —— 没有 `butler-sources` 键；
+- `conversation.session.header.actions`：**`butler`（order 40）active** —— 新的「管家」主按钮 + 「⋯」菜单入口；
+- `sidebar.right.pane.tab`：**`@dsh-external/dsh-butler/workspace` active** —— 右栏「管家资料」真页签。
+
+以上四项与「入口收敛为 4 席位」的实现一一对应，说明浏览器端加载的是 0.1.0 的新 client bundle，而不是旧版 8 席位代码。
+
+## 二、剩余：用户侧 GUI 肉眼确认
+
+自动化与运行时证据已覆盖功能契约；最后一项目标要求「真实 GUI 验收」，需要用户在界面里确认观感与交互：
+
+1. 会话头部：「管家」主按钮（服务铃）+「⋯」菜单（工作台 / 整理与资料 / 新建主题 / 交给管家整理）。
+2. 左侧栏只有一行「管家」；点击打开**管家工作台页**（不再跳进某个对话）。
+3. 工作台：顶部状态条（运行保护 / 存储 / 待核对 + 刷新 / 和管家说话），四区「今天 / 等你决定 / 资料与技能 / 系统状态」；点任务/笔记/待批/提醒 → 右侧抽屉（Esc 关闭、焦点回到原行）。
+4. 右栏「管家资料」：真 tablist（方向键 / Home / End 切换，记忆上次视图）。
+5. 设置 → 插件：「管家」条目有名称、描述、铃铛图标。
 
 ## 三、回滚
 
