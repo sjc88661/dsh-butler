@@ -8,5 +8,10 @@
 - **对话来源**：通过专门工具列出、搜索或读取的对话；不会自动注入其他会话全文。
 - **对话调用**：通过专门工具操作原生 DSH 对话；`accepted` 表示已受理，不表示任务已完成。Codex 对话目前只读。
 - **用量记录**：全局真实用量计数，与普通管家的执行预算不同；预检失败可能产生零用量，不代表配额耗尽。
+- **官方 bundle**：插件以官方插件包形态安装（`dsh.bundle.patch` + `cordis.patch.yml` + `locale/*.json` + `icon` + `install_bundle`），区别于手写 `file://` Loader 行注入；包本身不再声明 dsh 自带包依赖。
+- **入口席位**：客户端在宿主席位上的注册。0.1.0 收敛为 4 个入口（头部入口、侧栏行、工作台页、对话视图）+ 参考范围条 + 右栏页签；「对话来源」不再独占侧栏行。
+- **工作台页**：`main` 页上的管家工作台，是侧栏「管家」的默认落点；打开管家对话由头部主按钮触发，页面不再挂载即跳转。
+- **设计系统**：`src/client/ui/` 的 token / 样式 / 基础组件层；颜色只用宿主 `--dsw-alias-*`，品牌墨青仅用于图标与选中标记。
+- **对外插件接口**：能力包（packs）与通道（channels）的版本化 manifest（`schemaVersion: 1`）加运行时注册校验；会话来源与 UI 插槽暂不对外承诺。
 
-管家层的 Module 提供有限的 Interface；作用域判定是其 Seam。普通管家没有 token 硬预算，以作用域和按需加载控制输入；隔离提醒例外。用户档案仍有界注入，完整能力包和待办不自动注入。架构决定见 [ADR 0001](docs/adr/0001-dedicated-butler-layer.md)。
+管家层的 Module 提供有限的 Interface；作用域判定是其 Seam。普通管家没有 token 硬预算，以作用域和按需加载控制输入；隔离提醒例外。用户档案仍有界注入，完整能力包和待办不自动注入。架构决定见 [ADR 0001](docs/adr/0001-dedicated-butler-layer.md) 与 [ADR 0002](docs/adr/0002-official-bundle-and-extension-interface.md)。
