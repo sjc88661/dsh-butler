@@ -185,8 +185,9 @@ test('linked task and citation state cannot carry over to a different native the
   const workbench=nodes(e.tree).find(node=>typeof node.type==='function'&&node.type.name==='ButlerWorkbench')
   assert.equal(workbench.props.initialTaskId,'todo-a')
   await e.update({ctx:{},sessionId:'theme-b'})
-  const next=nodes(e.tree).find(node=>typeof node.type==='function'&&node.type.name==='OrganizationResults')
-  assert.ok(next);assert.equal(next.props.key,'theme-b')
+  const nextWorkbench=nodes(e.tree).find(node=>typeof node.type==='function'&&node.type.name==='ButlerWorkbench')
+  assert.ok(nextWorkbench,'The right pane remembers the open tab while switching native themes')
+  assert.equal(nextWorkbench.props.initialTaskId,undefined,'A linked task selection cannot carry over to a different native theme')
 })
 
 test('a late selection response cannot refresh or write into a closed source pane',async()=>{
@@ -202,7 +203,7 @@ test('a rejected source-chip removal cannot update the unmounted native composer
   await e.mount('src/client/workspace-panel.ts','ButlerSourceDock',props)
   e.reply(0,{ok:true,workspace:{sessions:[{id:'dock-a'}]}});await e.flush()
   e.reply(1,sourceList([ref]));await e.flush()
-  const chip=nodes(e.tree).find(node=>node.type==='button'&&node.props?.title?.includes('点击移出'))
+  const chip=nodes(e.tree).find(node=>(node.type==='button'||typeof node.type==='function')&&node.props?.title?.includes('点击移出'))
   assert.ok(chip);chip.props.onClick();await e.flush();e.unmount()
   e.requests[2].resolve({ok:false,status:503,json:async()=>({ok:false,error:'测试中的延迟失败'})});await pause()
   assert.equal(e.obsoleteWrites,0)
@@ -220,5 +221,5 @@ test('a transient workspace read failure offers a read-only retry instead of lea
 test('the native right pane handles the interval before any conversation is mounted',async()=>{
   const e=carrier()
   await assert.doesNotReject(e.mount('src/client/workspace-panel.ts','ButlerRightPane',{ctx:{}}))
-  assert.match(JSON.stringify(e.tree),/请先打开一条原生会话/)
+  assert.match(JSON.stringify(e.tree),/先打开一条会话/)
 })
