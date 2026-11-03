@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Butler Example Pack",
+    "description": "Example bundle: registers one capability pack and one declaration-only channel adapter through butlerExtensions."
+  }
+}

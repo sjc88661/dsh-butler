@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { resolve, join, sep } from 'node:path'
+import { pathToFileURL } from 'node:url'
 const script = resolve('scripts/build.mjs')
 const fixtureRoot = resolve('tests/.tmp')
 mkdirSync(fixtureRoot, { recursive: true })
@@ -40,7 +41,7 @@ test('a different compiler version is rejected before compiling or modifying the
   }
 })
 
-test('a clean offline build emits every declared package export, including browser type declarations', () => {
+test('a clean offline build emits every declared package export, including browser type declarations', async () => {
   const dir = mkdtempSync(join(fixtureRoot, 'clean-build-'))
   try {
     // 0.1.0 起包内还有官方 bundle 的静态资源（patch + locale + icon），
@@ -63,6 +64,24 @@ test('a clean offline build emits every declared package export, including brows
       }
     }
     assert.equal(existsSync(join(dir, 'node_modules')), false, 'A clean build must not install or repair dependencies')
+    // 构建产物必须真的"可加载"：Host bundle 是自包含 ESM（只依赖 node 内置），
+    // 这里直接 import 干净副本里的产物，验证导出契约与 Config 校验可用；
+    // extension 子路径则验证公开校验器能独立工作（第三方只需这个入口）。
+    const host = await import(pathToFileURL(join(dir, 'lib/index.js')).href)
+    assert.equal(host.name, '@dsh-external/dsh-butler')
+    assert.equal(typeof host.apply, 'function')
+    assert.equal(typeof host.Config, 'function', 'Config must be a callable Schemastery schema')
+    const validated = host.Config({ timeZone: 'Asia/Shanghai' })
+    assert.equal(validated.timeZone, 'Asia/Shanghai')
+    assert.equal(validated.sessionTitleName, '管家')
+    assert.throws(() => host.Config({ profileChars: 1 }), /profileChars/)
+    const extension = await import(pathToFileURL(join(dir, 'lib/extension.js')).href)
+    assert.equal(extension.BUTLER_EXTENSION_SCHEMA_VERSION, 1)
+    assert.throws(() => extension.validatePackManifest({ schemaVersion: 2 }), /schemaVersion/)
+    assert.equal(extension.validateChannelAdapter({
+      schemaVersion: 1, id: 'smoke-channel', title: '冒烟通道',
+      isReady: () => false, send: async () => ({ ok: false, reason: 'not wired' }),
+    }).id, 'smoke-channel')
   } finally {
     assert.ok(realpathSync(dir).startsWith(realpathSync(fixtureRoot) + sep))
     rmSync(dir, { recursive: true, force: true })

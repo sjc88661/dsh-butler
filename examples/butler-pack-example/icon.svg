@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="管家示例能力包">
+  <!-- 示例 bundle 图标：复用管家的服务铃造型，用中性蓝灰表示"第三方示例"。 -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#4A6272"/>
+  <path d="M32 13.6a12.6 12.6 0 0 0-12.6 12.6v6.1l-3.2 6.8a1.5 1.5 0 0 0 1.4 2.1h28.8a1.5 1.5 0 0 0 1.4-2.1l-3.2-6.8v-6.1A12.6 12.6 0 0 0 32 13.6Z" fill="#F2F5F7"/>
+  <rect x="23.4" y="42.4" width="17.2" height="3.4" rx="1.7" fill="#F2F5F7"/>
+  <circle cx="32" cy="51.2" r="3.2" fill="#F2F5F7"/>
+</svg>

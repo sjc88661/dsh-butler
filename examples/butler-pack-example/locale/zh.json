@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "管家示例能力包",
+    "description": "演示 bundle：通过 butlerExtensions 注册一个能力包与一个只声明、不投递的通道适配器。"
+  }
+}
