@@ -10,6 +10,7 @@ import { decideOrganization, fetchOrganizations, fetchSources, fetchWorkspace, s
 import { clearWorkspaceDraft, consumeWorkspacePaneHandoff, consumeWorkspacePaneRequest, copyWorkspaceText, handoffSourceToWorkspace, insertWorkspaceDraft, openWorkspaceConversation, openWorkspaceSidebar, prepareWorkspaceDraft, refreshWorkspaceUi, workspaceDraft, workspacePaneRequest, type WorkspaceInputActions } from './workspace-actions.ts'
 import { uiButton, uiCard, uiError, uiInput, uiMuted, uiRow, uiStatus, useWorkspaceOperation, useWorkspaceRead, useWorkspaceRevision } from './workspace-components.ts'
 import { ButlerStyles, Button, EmptyState, Tablist, TextArea } from './ui/index.ts'
+import { setRightPaneVisible } from './visibility.ts'
 import { shortTime, STATUS_LABEL, T } from './view.ts'
 
 export interface WorkspaceSlotProps { ctx?: Context; sessionId?: string; inputActions?: WorkspaceInputActions; useTabInfo?: () => { tab: { visible?: boolean } } }
@@ -130,6 +131,12 @@ export function ButlerRightPane(props: WorkspaceSlotProps): unknown {
   const setView = (next: RightView): void => { lastRightView = next; setPane({ sessionId, view: next }) }
   useEffect(() => { const next = sessionId ? consumeWorkspacePaneRequest(sessionId) : undefined; if (next) setView(next) }, [sessionId, revision])
   const tab = props.useTabInfo?.().tab
+  // 右栏页签被隐藏时，让 useWorkspaceRead 的轮询停表（见 visibility.ts）。
+  const paneVisible = tab?.visible !== false
+  useEffect(() => {
+    setRightPaneVisible(paneVisible)
+    return () => setRightPaneVisible(true)
+  }, [paneVisible])
   if (!sessionId) {
     return h('div', { className: 'butler-rightpane' }, h(ButlerStyles),
       h('div', { className: 'butler-rightpane__body' }, h(EmptyState, {

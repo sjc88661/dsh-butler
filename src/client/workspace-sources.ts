@@ -72,6 +72,7 @@ export function ButlerSources(props: { ctx: Context; sessionId: string; canSelec
   useEffect(() => { if (props.initialRef) show(props.initialRef) }, [props.initialRef?.provider, props.initialRef?.sessionId, props.initialRef?.eventId])
   const toggle = (ref: SourceRef): void => action(() => selectSources(props.sessionId, selected.some(item => sameSource(item, ref)) ? selected.filter(item => !sameSource(item, ref)) : [...selected, ref]), '参考范围已更新。')
   return h('section', { 'aria-label': '其他对话与来源设置' },
+    h('h2', { style: { margin: '0 0 8px', fontSize: '14px', lineHeight: '22px', fontWeight: 600, color: T.text } }, '对话来源'),
     props.canSelect ? h('section', { 'aria-label': '本次整理参考范围', style: uiCard },
       h('strong', null, `本次参考 ${selected.length} 项`),
       h('p', { style: uiMuted }, '指定消息与整段对话分别列出；准备指令只生成未发送草稿。'),
@@ -91,7 +92,8 @@ export function ButlerSources(props: { ctx: Context; sessionId: string; canSelec
         h('label', null, '更新起始日期', h('input', { type: 'date', value: since, style: uiInput, onChange: (event: { target: { value: string } }) => setSince(event.target.value) }))),
       h('label', null, '项目 / 工作区', h('input', { style: uiInput, value: project, onChange: (event: { target: { value: string } }) => setProject(event.target.value), placeholder: '项目路径或名称' })),
       h('button', { type: 'submit', style: uiButton, disabled: state.loading }, state.loading ? '正在更新索引…' : '搜索 / 刷新')),
-    uiError(state.error), uiStatus(message),
+    // 读失败与"正在读取来源…"都进同一个 polite 区域：读屏用户不会漏掉异步结果。
+    h('div', { 'aria-live': 'polite', 'aria-atomic': 'false' }, uiError(state.error), uiStatus(message)),
     data ? h('details', { style: uiCard }, h('summary', { style: { cursor: 'pointer' } }, '来源设置与读取范围'),
       h('p', { style: uiMuted }, '索引更新不调用模型；整理时按需读取。其他对话中的内容只作资料参考。'),
       h('label', { style: uiRow }, h('input', { type: 'checkbox', checked: data.settings.codexEnabled, disabled: busy, onChange: (event: { target: { checked: boolean } }) => action(() => configureSources({ codexEnabled: event.target.checked }), 'Codex 来源设置已更新。') }), '允许只读本机 Codex 已保存对话'),

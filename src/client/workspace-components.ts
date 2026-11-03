@@ -1,5 +1,6 @@
 import { createElement as h, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { subscribeWorkspaceUi, workspaceUiRevision } from './workspace-actions.ts'
+import { documentHidden, onDocumentVisible, rightPaneVisible } from './visibility.ts'
 import { buttonStyle, T } from './view.ts'
 
 export const uiButton = { ...buttonStyle, minHeight: '32px', color: T.text }
@@ -29,8 +30,20 @@ export function useWorkspaceRead<T>(read: () => Promise<T>, deps: readonly unkno
       })
     }
     load()
-    const timer = intervalMs ? window.setInterval(load, intervalMs) : undefined
-    return () => { current = false; if (timer !== undefined) window.clearInterval(timer) }
+    // 轮询只在"界面确实可见"时发请求：后台标签页与隐藏的右栏页签都跳过；
+    // 回到可见时立即补一次，避免等下一个周期才刷新。
+    const poll = intervalMs === undefined ? undefined : window.setInterval(() => {
+      if (documentHidden() || !rightPaneVisible()) return
+      load()
+    }, intervalMs)
+    const cancelVisible = intervalMs === undefined ? undefined : onDocumentVisible(() => {
+      if (rightPaneVisible()) load()
+    })
+    return () => {
+      current = false
+      if (poll !== undefined) window.clearInterval(poll)
+      cancelVisible?.()
+    }
   }, deps)
   return state
 }

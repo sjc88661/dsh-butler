@@ -20,11 +20,12 @@
  * @module @dsh-external/dsh-butler/client/workbench
  */
 import { createElement as h } from 'react'
-import type { HistoryPage, Memo, NoteEntry, Overview, PendingItem, Receipt, Task } from '../api.ts'
+import type { HistoryPage, Memo, NoteEntry, Overview, PendingItem, Receipt, ReminderRecord, Task } from '../api.ts'
 import {
   BUTLER_COLORS,
   BUTLER_SPACE,
   BUTLER_TYPE,
+  Button,
   Divider,
   EmptyState,
   InlineError,
@@ -34,6 +35,7 @@ import {
   StatChip,
   StatusDot,
   statusTone,
+  TextField,
   type ButlerTone,
 } from '../ui/index.ts'
 import { STATUS_LABEL, shortDuration, shortNumber, shortTime } from '../view.ts'
@@ -136,6 +138,29 @@ export function taskRow(task: Task, openTask: (id: string) => void, selected: bo
   h('div', { style: { display: 'flex', alignItems: 'center', gap: BUTLER_SPACE.xs, marginLeft: 'auto' } },
     h(Pill, { tone: statusTone(task.status) }, STATUS_LABEL[task.status]),
     h('span', { style: microStyle }, `最近 ${shortTime(task.updatedAt)}`)))
+}
+
+/**
+ * 一条提醒：状态点、标题、计划时间、最近投递与启用状态。
+ *
+ * 只呈现调度目录的快照。「已启用 / 已排期 / 已投递 / 助手已处理 / 外部平台
+ * 已送达」是互相独立的事实，这里不合并成一句"成功"。
+ * @param record - 调度目录里的一条提醒。
+ * @returns 该行元素。
+ */
+export function reminderRow(record: ReminderRecord): unknown {
+  const armed = record.status !== 'inactive'
+  const tone = armed ? statusTone('pending') : statusTone('cancelled')
+  const delivery = record.lastDelivery === undefined
+    ? '尚未投递'
+    : `最近投递 ${shortTime(record.lastDelivery.deliveredAt)}`
+  const schedule = record.scheduledAt === undefined ? '计划时间未提供' : `计划 ${shortTime(record.scheduledAt)}`
+  return h('div', { key: record.id, style: { ...rowStyle, cursor: 'default' }, 'data-butler-reminder': record.id },
+    h(StatusDot, { tone, size: 8, label: armed ? '启用中' : '已停止' }),
+    h('div', { style: rowBodyStyle },
+      h('div', { style: titleStyle }, record.title ?? record.prompt ?? record.id),
+      h('div', { style: metaStyle }, `${schedule} · ${delivery}`)),
+    h(Pill, { tone }, armed ? '启用中' : '已停止'))
 }
 
 /**
@@ -332,6 +357,14 @@ export interface ResourcesZoneProps {
   notes: NoteEntry[]
   /** Note listing failure, when the last read failed. */
   notesError?: string | undefined
+  /** Current client-side search filter for the note list. */
+  noteQuery: string
+  /** Change the note search filter; the panel resets the page size. */
+  onNoteQuery: (value: string) => void
+  /** Notes matching the filter that are not rendered yet. */
+  noteRemaining: number
+  /** Render the next page of matching notes. */
+  onShowMoreNotes: () => void
   /** Retry the note listing read. */
   onRetryNotes: () => void
   /** Open the note detail drawer. */
@@ -348,12 +381,13 @@ export interface ResourcesZoneProps {
  */
 export function resourcesZone(props: ResourcesZoneProps): unknown {
   const packs = props.overview.packs
-  const noteCount = props.notes.length
+  const noteTotal = props.notes.length + props.noteRemaining
+  const searching = props.noteQuery.trim() !== ''
   const packCount = packs?.length
   const enabledPacks = packs === undefined ? undefined : packs.filter(pack => pack.enabled).length
   const groups: unknown[] = []
   groups.push(h('div', { style: groupStyle },
-    h('h3', { style: heading3Style }, `文档 Space · ${noteCount} 篇`),
+    h('h3', { style: heading3Style }, searching ? `文档 Space · 匹配 ${noteTotal} 篇` : `文档 Space · ${noteTotal} 篇`),
     props.notesError === undefined
       ? null
       : h(InlineError, {
@@ -361,12 +395,24 @@ export function resourcesZone(props: ResourcesZoneProps): unknown {
         retry: props.onRetryNotes,
         retryLabel: '重试',
       }),
-    noteCount === 0
+    noteTotal === 0 && !searching
       ? h(EmptyState, { title: '还没有笔记', description: '让管家整理一篇就会出现在这里。' })
+      : h(TextField, {
+        value: props.noteQuery,
+        placeholder: '按笔记路径搜索',
+        ariaLabel: '搜索笔记',
+        onChange: props.onNoteQuery,
+      }),
+    noteTotal === 0 && searching
+      ? h(EmptyState, { title: '没有匹配的笔记', description: '换个关键词，或清空搜索看全部笔记。' })
       : h('div', { style: groupStyle }, ...props.notes.map(entry => {
         const slug = entry.path.replace(/^notes\//, '').replace(/\.md$/, '')
         return noteRow(entry, props.openNote, slug === props.selectedSlug)
-      }))))
+      })),
+    props.noteRemaining > 0
+      ? h('div', { style: rowStyle },
+        h(Button, { size: 'sm', variant: 'ghost', onClick: props.onShowMoreNotes }, `显示更多（剩余 ${props.noteRemaining} 篇）`))
+      : null))
   groups.push(h('div', { style: groupStyle },
     h('h3', { style: heading3Style }, packs === undefined ? '技能包 · 未读到' : `技能包 · ${enabledPacks}/${packCount} 已启用`),
     props.overview.packsError !== undefined
@@ -379,8 +425,8 @@ export function resourcesZone(props: ResourcesZoneProps): unknown {
 
   return h(Section, {
     title: '资料与技能',
-    count: noteCount + (packCount ?? 0),
-    hint: `笔记 ${noteCount} · 技能包 ${packs === undefined ? '未读到' : `${enabledPacks}/${packCount} 启用`}`,
+    count: noteTotal + (packCount ?? 0),
+    hint: `笔记 ${noteTotal} · 技能包 ${packs === undefined ? '未读到' : `${enabledPacks}/${packCount} 启用`}`,
     collapsible: true,
     defaultOpen: false,
     bodyId: 'butler-zone-resources',
@@ -577,6 +623,13 @@ export function systemZone(props: SystemZoneProps): unknown {
       ? null
       : h('div', { style: stackStyle, 'data-butler-usage-details': '' }, ...detailLines.map((line, index) => mutedLine(line, index)))),
   h(Divider),
+  h('h3', { style: heading3Style }, overview.remindersAvailable ? `提醒 · ${overview.reminders.length} 条` : '提醒 · 未读到'),
+  overview.remindersAvailable
+    ? overview.reminders.length === 0
+      ? mutedLine('还没有建立提醒。')
+      : h('div', { style: groupStyle }, ...overview.reminders.slice(0, 20).map(reminderRow),
+        overview.reminders.length > 20 ? mutedLine(`只显示前 20 条，共 ${overview.reminders.length} 条。`) : null)
+    : mutedLine('当前宿主没有提供提醒目录：计数与列表都不可读，不代表没有提醒。'),
   h('h3', { style: heading3Style }, '运行保护与预算'),
   runtimeContent(controls, props.openTask),
   h('h3', { style: heading3Style }, '保存的运行预算'),

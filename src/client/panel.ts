@@ -42,6 +42,7 @@ import { PANEL_ID } from './ids.ts'
 import { shortTime } from './view.ts'
 import { openButlerConversation, rememberReadySession } from './navigate.ts'
 import { runtimeView } from './workbench-model.ts'
+import { documentHidden, onDocumentVisible } from './visibility.ts'
 import { taskDetailPane } from './workbench-details.ts'
 import { continueTaskWithButler, copyTaskContinuation, openTaskFile, openTaskSourceConversation, subscribeTaskFiles, taskFileSnapshot, type TaskActionOutcome } from './workbench-actions.ts'
 import {
@@ -65,6 +66,10 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
   const [error, setError] = useState<string | null>(null)
   const [notes, setNotes] = useState<NoteResult | null>(null)
   const [noteEntries, setNoteEntries] = useState<NoteEntry[]>([])
+  // 资料区列表很长（宿主最多 200 篇）：前端只按"搜索词 + 显示条数"切片，
+  // 不重新请求，也不改变后端上限。切换搜索词时把条数重置回第一页。
+  const [noteQuery, setNoteQuery] = useState('')
+  const [noteLimit, setNoteLimit] = useState(20)
   const [openSlug, setOpenSlug] = useState<string | null>(null)
   const [navProblem, setNavProblem] = useState<string | null>(null)
   const [openTaskId, setOpenTaskId] = useState<string | null>(props.initialTaskId ?? null)
@@ -99,10 +104,16 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
   useEffect(() => {
     const controller = new AbortController()
     void load(controller.signal)
-    const timer = window.setInterval(() => { void load(controller.signal) }, POLL_MS)
+    // 15s 轮询只在界面可见时发请求；切回前台立刻补一次。
+    const timer = window.setInterval(() => {
+      if (documentHidden()) return
+      void load(controller.signal)
+    }, POLL_MS)
+    const cancelVisible = onDocumentVisible(() => { void load(controller.signal) })
     return () => {
       controller.abort()
       window.clearInterval(timer)
+      cancelVisible()
     }
   }, [])
 
@@ -231,6 +242,12 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
     },
   })
 
+  const noteFilter = noteQuery.trim().toLowerCase()
+  const filteredNotes = noteFilter === ''
+    ? noteEntries
+    : noteEntries.filter(entry => entry.path.toLowerCase().includes(noteFilter))
+  const visibleNotes = filteredNotes.slice(0, noteLimit)
+
   const body = overview === null
     ? error === null
       ? h('div', { style: { flex: '1 1 auto', minHeight: '0', padding: '16px' } },
@@ -249,8 +266,12 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
         decisionsZone({ overview, openTask: openTaskDetail, openMemo: openMemoDetail, openApproval: openApprovalDetail, openNotice: openNoticeDetail, selectedTaskId: openTaskId }),
         resourcesZone({
           overview,
-          notes: noteEntries,
+          notes: visibleNotes,
           notesError: noteListError,
+          noteQuery,
+          onNoteQuery: value => { setNoteQuery(value); setNoteLimit(20) },
+          noteRemaining: Math.max(0, filteredNotes.length - visibleNotes.length),
+          onShowMoreNotes: () => setNoteLimit(value => value + 20),
           onRetryNotes: () => setNoteAttempt(value => value + 1),
           openNote: openNoteDetail,
           selectedSlug: openSlug,
