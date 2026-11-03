@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Native offline build: compilation never installs packages or repairs junctions. */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
@@ -45,6 +45,10 @@ try {
     run('host typecheck', tools.tsc, ['-p', 'tsconfig.json', '--noEmit'])
     run('client typecheck', tools.tsc, ['-p', 'tsconfig.client.json'])
     if (!flags.has('--typecheck')) {
+      // lib/ is pure build output: stale tsdown chunks from an older build would
+      // otherwise stay in the package (files: ["lib"]) forever. Only emitted
+      // artifacts are removed here - src/, types/ and junctions are untouched.
+      rmSync(join(root, 'lib'), { recursive: true, force: true })
       // Both halves are bundled by tsdown: the Host bundle must not import
       // dsh packages at runtime (a linked workspace package resolves modules
       // from its own tree, not the profile's node_modules). tsc therefore only

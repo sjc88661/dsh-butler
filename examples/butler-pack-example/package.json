@@ -1,0 +1,22 @@
+{
+  "name": "@dsh-external/butler-pack-example",
+  "version": "0.1.0",
+  "private": true,
+  "description": "管家对外接口示例 bundle：用 butlerExtensions（schemaVersion 1）注册一个能力包和一个只声明、不投递的通道适配器",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "license": "BSD-3-Clause",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+# 示例 bundle 的补丁层。
+#
+# 安装后只插入这一行；本示例没有 config（真实 bundle 可以在这里写默认值，
+# 部署侧的覆盖写在 profile 自己的补丁层，按 id `butler-pack-example` 覆写）。
+- insert:
+    - id: butler-pack-example
+      name: '@dsh-external/butler-pack-example'

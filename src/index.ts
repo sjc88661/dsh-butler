@@ -5,7 +5,7 @@
  * and refuses to claim anything it cannot show. Everything else is meant to
  * arrive as an installable pack, so the entry point stays small.
  *
- * On activation it does five things, and none of them spend a model call:
+ * On activation it does six things, and none of them spend a model call:
  *
  * 1. Seeds the vault that holds everything the owner can open and edit.
  * 2. Turns any task left `running` by a crash into `interrupted`, and says so
@@ -14,6 +14,8 @@
  * 4. Mounts four read-only HTTP routes the workbench panel reads.
  * 5. Gives registered butler conversations a bounded profile and discovery
  *    tools; other conversations keep their native prompts and execution.
+ * 6. Publishes the `butlerExtensions` service (`schemaVersion: 1`) so sibling
+ *    bundles can register capability packs and channel adapters.
  *
  * @module @dsh-external/dsh-butler
  */
@@ -47,6 +49,8 @@ import { installSkillLoading } from './host/skill-loading.ts'
 import { installExecutionContext, type ExecutionContexts } from './host/execution-context.ts'
 import { storageStatus } from './host/store.ts'
 import { installBusinessWorkflows, type BusinessWorkflows } from './host/workflow-runtime.ts'
+import { installButlerExtensions, type ButlerExtensionsHostContext } from './host/extensions.ts'
+import { BUTLER_EXTENSION_SCHEMA_VERSION } from './shared/extension.ts'
 import type { ButlerReminderDelivery } from './host/reminder-delivery.ts'
 import { readMemoryContext } from './host/memory.ts'
 import { channelContextPolicy } from './host/channel-attribution.ts'
@@ -154,6 +158,31 @@ export function apply(ctx: AppContext, config: Config): void {
   } catch (error) {
     // Keep runtime guards installed even when business state cannot be read.
     ctx.logger?.error?.('[dsh-butler] 业务资料不可用，保留原件并阻止损坏状态写入：%s', String(error))
+  }
+
+  // The public extension surface (module header, item 6): publish
+  // `butlerExtensions` so sibling bundles can register capability packs and
+  // channel adapters. Registering is itself schema-validated (schemaVersion 1);
+  // nothing here sends, connects or grants anything. This block must never break
+  // activation: a host without `ctx.provide`, a failed publication or a broken
+  // registration degrades to a warning, and the butler's own features keep
+  // working without extension packs. The effect returns the installation's
+  // stop() so unloading the bundle clears the service, the read-model hook and
+  // every registration.
+  try {
+    const extensions = installButlerExtensions(ctx as unknown as ButlerExtensionsHostContext)
+    ctx.effect(() => extensions.stop, 'butler: extension registry')
+    if (extensions.active) {
+      ctx.logger?.info?.(
+        '[dsh-butler] 对外扩展接口已发布：%s（schemaVersion %d）；注册能力包/通道适配器的契约见 docs/extension-api.md',
+        extensions.serviceName,
+        BUTLER_EXTENSION_SCHEMA_VERSION,
+      )
+    } else {
+      ctx.logger?.warn?.('[dsh-butler] 对外扩展接口未发布（管家其余功能不受影响）：%s', extensions.problem ?? '原因未知')
+    }
+  } catch (error) {
+    ctx.logger?.warn?.('[dsh-butler] 对外扩展接口初始化失败，能力包/通道注册被跳过（管家其余功能不受影响）：%s', String(error))
   }
 
   // 3-4. Tools and the panel's read routes.

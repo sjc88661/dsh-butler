@@ -21,6 +21,47 @@ node scripts/build.mjs --no-pack
 #   plugin_manager install_bundle  target=E:\opendots\dsh-butler
 ```
 
+## 对外插件接口（能力包 packs / 通道 channels）
+
+0.1.0 起管家开放**版本化的对外插件接口**（`schemaVersion: 1`），供其它 DSH bundle
+注册能力包与通道适配器。完整契约、字段上限与错误语义见
+[`docs/extension-api.md`](docs/extension-api.md)，可运行示例见
+[`examples/butler-pack-example/`](examples/butler-pack-example/README.md)。
+
+- 形式：运行时注册 + 校验 Service。管家激活时发布 Cordis 服务
+  `butlerExtensions`（`ctx.get('butlerExtensions', false)`），提供
+  `registerPack(manifest)`、`registerChannel(adapter)`、`list()`；两个 register 都返回
+  幂等 disposer。
+- 版本门槛：所有 manifest/adapter 必须显式写 `schemaVersion: 1`；缺失或版本不符
+  直接抛错，诊断信息指出期望值，不做静默降级。
+- 能力包（`registerPack`）：`id`（`^[a-z][a-z0-9-]{1,31}$`，不得与内置 id 冲突）、
+  `title`、`triggers`、`instructions`、`evidence`、`permissions` 必填；`tools`、`budget`、
+  `cost_class` 可选。注册后出现在 `listPacks()` / `packsSummary()` / `getPack()` /
+  `matchPacks()` / 指令段中，`source: 'extension'`、`boundary` 恒为内核
+  `PACK_BOUNDARY`（不从 manifest 读取）。同 id 重复注册抛错（含 id 与已有来源）；
+  dispose 后立即从列表、摘要与指令中消失。
+- 优先级：**用户 Markdown 包 > 扩展包 > 内置包**。用户 `vault/packs/<id>.md` 覆盖
+  扩展包；扩展包与内置 id 冲突在校验阶段拒绝。扩展包启用状态跟随注册生命周期，
+  不受 `state/packs.json` 控制（`setPackEnabled` 对它会明确报错）。
+- 通道（`registerChannel`）：必填 `schemaVersion`/`id`/`title`/`isReady`/`send`，
+  可选 `limits`（纯声明）。校验只查存在性与类型，不调用 `send`/`isReady`；注册
+  **不建立连接、不读凭据、不选目标、不接管投递、不授予权限**。
+- 生命周期：`src/index.ts` 在 `apply` 内创建注册表并用 `ctx.provide` 发布服务，
+  `ctx.effect` 保证插件卸载时清空；第三方 `apply` 失败只影响它自己，不会拖垮管家
+  （初始化全程 try/catch + `ctx.logger?.warn?.`）。
+- 公开子路径：`@dsh-external/dsh-butler/extension` 导出
+  `BUTLER_EXTENSION_SCHEMA_VERSION`、`validatePackManifest`、`validateChannelAdapter`
+  及 `ButlerExtensionService` / `PackManifest` / `ButlerChannelAdapter` 等类型；第三方
+  用 `devDependencies` + `import type` 取类型，运行时只走 `ctx.get`，不 import 管家。
+- 非目标（后置）：会话来源（sources）与 UI 插槽（slots）；通道真实投递路由。
+
+```powershell
+$env:DSH_CHECKOUT='C:\Users\申俊超\dsh-harness'
+$env:DSH_PROFILE_DIR='C:\Users\申俊超\.dsh\profiles\desktop'
+node scripts/build.mjs --typecheck
+node --test tests/*.test.mjs
+```
+
 ## 0.0.22 发布说明（release.1）
 
 本版本是候选发布包，**没有部署到任何真实宿主**；本文档其他章节中的版本描述与验收记录是历史批次的证据，不代表 0.0.22 已上线。

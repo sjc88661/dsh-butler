@@ -13,7 +13,7 @@ export function packRow(pack: PackEntry): unknown {
     h('summary', { 'aria-label': `查看能力包：${pack.title}`, style: { cursor: 'pointer', overflowWrap: 'anywhere' } },
       h('span', { style: { color: pack.broken ? T.err : pack.enabled ? T.text : T.dim } }, pack.title),
       h('span', { style: { color: T.dim, fontSize: '11px', marginLeft: '8px' } },
-        `${pack.enabled ? '已启用' : '已停用'} · ${pack.source === 'user' ? '你写的（含同 id 覆盖）' : '内置'} · ${packCostLabel(pack.cost_class)}`)),
+        `${pack.enabled ? '已启用' : '已停用'} · ${pack.source === 'user' ? '你写的（含同 id 覆盖）' : pack.source === 'extension' ? '扩展注册（由插件注册，随注册存活）' : '内置'} · ${packCostLabel(pack.cost_class)}`)),
     h('div', { style: { padding: '4px 8px 8px' } },
       pack.broken ? field('读不出来', pack.broken) : null,
       guidance ? h('div', {},

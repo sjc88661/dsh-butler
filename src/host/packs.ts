@@ -12,12 +12,22 @@
  *
  * - **built-in** packs, shipped in this file, because they are the abilities
  *   every owner needs before writing anything (daily, life, documents, study,
- *   research);
+ *   research, nature);
  * - **user** packs, markdown files in `vault/packs/<id>.md`, because the point
  *   of packs is that adding an ability is editing one file the owner can open -
  *   not a release. Front matter carries the contract fields; the body is the
  *   instruction text verbatim. `butler_pack {action:'scaffold'}` writes one to
  *   start from.
+ *
+ * A third kind joins them at runtime: **extension** packs registered by another
+ * bundle through the `butlerExtensions` service (`schemaVersion: 1`, see
+ * `docs/extension-api.md`). They are merged in this read model through
+ * {@link setExtensionPackSource}; their lifetime follows the registration, not
+ * `state/packs.json`. Precedence when ids collide is
+ * **user markdown > extension > builtin**: a user file overrides both a shipped
+ * pack and an extension pack with the same id, and registering an extension
+ * pack under a built-in id is rejected during validation instead of silently
+ * replacing it.
  *
  * Honesty rules this module keeps:
  *
@@ -25,6 +35,9 @@
  *   stays a kernel gate (external actions never run from a pack's say-so).
  * - `enabled` state is stored, not guessed, and a pack that fails to parse is
  *   reported as broken rather than silently dropped.
+ * - Extension packs are always enabled while registered; `setPackEnabled` refuses
+ *   to pretend otherwise (the owner can override one only with a same-id user
+ *   file).
  * - `matchPacks` is keyword matching and says so: it returns the triggers that
  *   literally hit, never an "intent" verdict.
  *
@@ -34,6 +47,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { readText, statePath, vaultPath, writeText } from './vault.ts'
 import { PACK_BOUNDARY, PACK_BOUNDARY_DESCRIPTION, packCostLabel, type PackBoundary, type PackCostClass, type PackGuidance, type PackSource, type PackSummary } from '../shared/packs.ts'
+import type { ExtensionPackEntry } from '../shared/extension.ts'
 
 export type { PackCostClass, PackSource } from '../shared/packs.ts'
 
@@ -63,7 +77,7 @@ export interface PackContract {
 export interface PackView extends PackContract {
   /** Kernel-derived semantics, independent of declared pack text. */
   boundary: PackBoundary
-  /** Where it came from. */
+  /** Where it came from: shipped, owner-written, or registered by a bundle. */
   source: PackSource
   /** Absolute path of the user file, when it is a user pack. */
   path?: string
@@ -205,6 +219,41 @@ const BUILTIN: readonly (PackContract & { defaultEnabled: boolean })[] = [
   },
 ]
 
+/** Ids owned by the kernel; an extension pack may not reuse one. */
+export const BUILTIN_PACK_IDS: readonly string[] = Object.freeze(BUILTIN.map(pack => pack.id))
+
+/**
+ * Runtime source of extension packs, installed by the host extension registry.
+ *
+ * Kept as a hook because this module's read functions are called from tools,
+ * prompts and HTTP routes without a Cordis context in hand; the registry is an
+ * instance created during activation. `undefined` means "no extension surface",
+ * which is exactly the pre-registry behavior.
+ */
+export type ExtensionPackSource = () => readonly ExtensionPackEntry[]
+
+/** Currently installed extension-pack provider. */
+let extensionPackSource: ExtensionPackSource | undefined
+
+/**
+ * Install the extension-pack provider consulted by {@link listPacks}.
+ *
+ * One provider is active at a time (one butler activation). The returned
+ * disposer is idempotent and only clears the slot when it still owns it, so a
+ * reloaded registry cannot detach a newer one.
+ * @param source - reads the registry's current pack list.
+ * @returns a disposer that restores the "no extension surface" state.
+ */
+export function setExtensionPackSource(source: ExtensionPackSource): () => void {
+  extensionPackSource = source
+  let installed = true
+  return () => {
+    if (!installed) return
+    installed = false
+    if (extensionPackSource === source) extensionPackSource = undefined
+  }
+}
+
 /** Why the state file could not be read, set by the most recent {@link readState}. */
 let stateProblem: string | undefined
 
@@ -327,11 +376,14 @@ function readUserPack(path: string): PackContract | { broken: string } {
 }
 
 /**
- * All packs: built-ins merged with user files, each with its effective state.
+ * All packs: built-ins merged with extension registrations and user files.
  *
- * A user file whose id matches a built-in **replaces** that built-in: that is
- * how an owner rewrites a shipped pack without forking this plugin.
- * @returns every pack, built-ins first, then user-only packs.
+ * Precedence on an id collision is **user markdown > extension > builtin**. A
+ * user file whose id matches a built-in or extension pack **replaces** it: that
+ * is how an owner rewrites a pack without forking this plugin. Extension packs
+ * never collide with built-ins (registration rejects those ids) and are always
+ * enabled while registered; a same-id user file hides them.
+ * @returns every pack, built-ins first, then extension packs, then user-only packs.
  */
 export function listPacks(): PackView[] {
   const state = readState()
@@ -339,6 +391,21 @@ export function listPacks(): PackView[] {
   for (const pack of BUILTIN) {
     const { defaultEnabled, ...contract } = pack
     byId.set(pack.id, { ...contract, boundary: PACK_BOUNDARY, source: 'builtin', enabled: isEnabled(pack.id, defaultEnabled, state) })
+  }
+
+  // Extension packs sit between built-ins and user files: a registered pack is
+  // not a shipped pack, but the owner's own markdown still wins.
+  for (const pack of extensionPackSource?.() ?? []) {
+    byId.set(pack.id, {
+      ...pack,
+      triggers: [...pack.triggers],
+      tools: [...pack.tools],
+      budget: { ...pack.budget },
+      // Never trust a provider-supplied boundary: the read model regenerates it.
+      boundary: PACK_BOUNDARY,
+      source: 'extension',
+      enabled: true,
+    })
   }
 
   let files: string[] = []
@@ -398,6 +465,12 @@ export function enabledPacks(): PackView[] {
 
 /**
  * Switch a pack on or off, recording the decision.
+ *
+ * Extension packs are exempt: their enabled state follows the registration
+ * lifetime (a bundle that wants one off disposes its registration), so they are
+ * not writeable through `state/packs.json`. Attempting it throws a clear error
+ * instead of pretending the switch worked. To override an extension pack, the
+ * owner writes a same-id markdown file under `vault/packs/`.
  * @param id - pack id.
  * @param enabled - desired state.
  * @returns the updated pack, or `undefined` when no such pack exists.
@@ -405,6 +478,9 @@ export function enabledPacks(): PackView[] {
 export function setPackEnabled(id: string, enabled: boolean): PackView | undefined {
   const pack = getPack(id)
   if (pack === undefined) return undefined
+  if (pack.source === 'extension') {
+    throw new Error(`管家扩展：能力包 "${id}" 来自扩展注册（source: extension），启用状态跟随注册生命周期，不受用户开关控制；要停用它，请让注册方释放注册，或用同 id 的用户包（vault/packs/${id}.md）覆盖。`)
+  }
   const state = readState()
   const on = new Set(state.enabled.filter((row) => row !== id))
   const off = new Set(state.disabled.filter((row) => row !== id))
@@ -452,16 +528,20 @@ export function packInstructions(request?: string): string {
     lines.push(`当前启用的能力包（${packs.length} 个）——按用户的请求选相关的照做；不相关的不要硬套：`)
     if (request !== undefined) {
       lines.push(`目录：${packs.map(pack => `${pack.id}=${pack.title}`).join('；')}。`)
-      lines.push('下列只展开相关内置包及全部自建包；需要未展开领域时，先用butler_pack show读取完整指引，再执行。目录不替代证据、授权与运行时预算。')
+      lines.push('下列只展开相关内置包、命中的扩展注册包及全部自建包；需要未展开领域时，先用butler_pack show读取完整指引，再执行。目录不替代证据、授权与运行时预算。')
     }
     for (const pack of packs) {
       // Core daily obligations and user-authored contracts remain unconditional.
       // No match count limit: a request can legitimately need several domains.
+      // Extension packs are third-party text, so like built-ins they must earn
+      // their prompt space with a literal trigger hit; the catalog line above
+      // keeps the model able to find them by id.
       const text = request?.toLowerCase()
-      if (text !== undefined && pack.source === 'builtin' && pack.id !== 'daily'
+      if (text !== undefined && pack.source !== 'user' && pack.id !== 'daily'
         && !pack.triggers.some(trigger => trigger !== '' && text.includes(trigger.toLowerCase()))) continue
       expanded.push(pack)
-      lines.push(`\n【${pack.title}】id=${pack.id}｜${packCostLabel(pack.cost_class)}${pack.source === 'user' ? '｜用户自建' : ''}`)
+      const origin = pack.source === 'user' ? '｜用户自建' : pack.source === 'extension' ? '｜扩展注册' : ''
+      lines.push(`\n【${pack.title}】id=${pack.id}｜${packCostLabel(pack.cost_class)}${origin}`)
       lines.push(pack.instructions)
       lines.push(`证据：${pack.evidence}`)
       lines.push(`授权提示（非批准）：${pack.permissions}`)

@@ -63,6 +63,7 @@ const hostBundle = {
   entry: {
     index: 'src/index.ts',
     channels: 'src/channels.ts',
+    extension: 'src/extension.ts',
     'reminder-delivery': 'src/reminder-delivery.ts',
   },
   outDir: 'lib',

@@ -27,6 +27,10 @@
     "cost-probe": "node scripts/cost-probe.mjs"
   },
   "exports": {
+    "./extension": {
+      "types": "./lib/types/extension.d.ts",
+      "default": "./lib/extension.js"
+    },
     "./reminder-delivery": {
       "types": "./lib/types/reminder-delivery.d.ts",
       "default": "./lib/reminder-delivery.js"
