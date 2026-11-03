@@ -1,6 +1,6 @@
 import { createElement as h, useEffect, useRef, useState } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
-import { clientService } from './navigate.ts'
+import { clientService, openButlerConversation, type NavOutcome } from './navigate.ts'
 import { ButlerWorkbench } from './panel.ts'
 import { openTaskFile, useTaskFileHandoff } from './workbench-actions.ts'
 import { ButlerSources } from './workspace-sources.ts'
@@ -9,6 +9,8 @@ import { ButlerDailyTrial } from './daily-trial.ts'
 import { decideOrganization, fetchOrganizations, fetchSources, fetchWorkspace, selectSources, workspaceAction, type SourceRef, type WorkspaceSnapshot } from './workspace-api.ts'
 import { clearWorkspaceDraft, consumeWorkspacePaneHandoff, consumeWorkspacePaneRequest, copyWorkspaceText, handoffSourceToWorkspace, insertWorkspaceDraft, openWorkspaceConversation, openWorkspaceSidebar, prepareWorkspaceDraft, refreshWorkspaceUi, workspaceDraft, workspacePaneRequest, type WorkspaceInputActions } from './workspace-actions.ts'
 import { uiButton, uiCard, uiError, uiInput, uiMuted, uiRow, uiStatus, useWorkspaceOperation, useWorkspaceRead, useWorkspaceRevision } from './workspace-components.ts'
+import { ButlerBellGlyph } from './icon.ts'
+import { ButlerStyles, Button, EmptyState, Tablist, TextArea } from './ui/index.ts'
 import { shortTime, STATUS_LABEL, T } from './view.ts'
 
 export interface WorkspaceSlotProps { ctx?: Context; sessionId?: string; inputActions?: WorkspaceInputActions; useTabInfo?: () => { tab: { visible?: boolean } } }
@@ -99,11 +101,21 @@ function OrganizationResults(props: { ctx: Context; sessionId: string; showSourc
     ...standaloneDrafts.filter(draft => !documents.some(document => document.drafts?.some(item => item.id === draft.id))).map(renderDraft))
 }
 
+/** 右栏四个视图；顺序即 tablist 顺序。 */
+type RightView = 'workspace' | 'sources' | 'results' | 'workbench'
+const RIGHT_TABS: readonly { id: RightView; label: string }[] = [
+  { id: 'workspace', label: '工作区' },
+  { id: 'sources', label: '其他对话' },
+  { id: 'results', label: '整理结果' },
+  { id: 'workbench', label: '任务与资料' },
+]
+/** 记住最后一次手动选择，避免同一页签的默认内容随"归属"漂移。 */
+let lastRightView: RightView | undefined
+
 /** Public SidebarRight page keeps the native conversation and composer in the center. */
 export function ButlerRightPane(props: WorkspaceSlotProps): unknown {
   const ctx = props.ctx as Context, sessionId = currentSession(props), revision = useWorkspaceRevision()
-  type View = 'workspace' | 'sources' | 'results' | 'workbench'
-  const [pane, setPane] = useState<{ sessionId?: string; view: View } | undefined>(() => {
+  const [pane, setPane] = useState<{ sessionId?: string; view: RightView } | undefined>(() => {
     const view = sessionId ? workspacePaneRequest(sessionId) : undefined
     return view ? { sessionId, view } : undefined
   })
@@ -114,35 +126,74 @@ export function ButlerRightPane(props: WorkspaceSlotProps): unknown {
   if (workspace.data) lastWorkspace.current = workspace.data.workspace
   const knownWorkspace = workspace.data?.workspace ?? lastWorkspace.current
   const owns = knownWorkspace?.sessions.some(item => item.id === sessionId) === true
-  const view = pane && pane.sessionId === sessionId ? pane.view : owns ? 'results' : 'sources'
-  const setView = (next: View): void => setPane({ sessionId, view: next })
-  useEffect(() => { const requested = sessionId ? consumeWorkspacePaneRequest(sessionId) : undefined; if (requested) setView(requested) }, [sessionId, revision])
+  const requested = pane && pane.sessionId === sessionId ? pane.view : undefined
+  const view: RightView = requested ?? (owns ? lastRightView ?? 'results' : 'sources')
+  const setView = (next: RightView): void => { lastRightView = next; setPane({ sessionId, view: next }) }
+  useEffect(() => { const next = sessionId ? consumeWorkspacePaneRequest(sessionId) : undefined; if (next) setView(next) }, [sessionId, revision])
   const tab = props.useTabInfo?.().tab
-  if (!sessionId) return uiError('请先打开一条原生会话，再打开管家资料。')
-  return h('div', { 'data-dsh-butler-workspace': sessionId, style: { height: '100%', minHeight: '0', minWidth: '0', display: 'flex', flexDirection: 'column', color: T.text, background: T.bg, fontSize: '13px' } },
-    h('nav', { 'aria-label': '管家资料导航', style: { ...uiRow, padding: '10px', borderBottom: `1px solid ${T.border}`, flex: '0 0 auto' } },
-      ...([['workspace', '工作区'], ['sources', '其他对话'], ['results', '整理结果'], ['workbench', '任务与资料']] as const).map(([key, label]) => h('button', { key, type: 'button', style: { ...uiButton, background: view === key ? T.bg2 : 'transparent' }, 'aria-pressed': view === key, onClick: () => setView(key) }, label))),
-    owns ? h(ButlerDailyTrial, { key: `trial:${sessionId}`, sessionId }) : null,
-    owns ? h(ButlerWorkspaceUsage, { key: sessionId, sessionId }) : null,
-    h('div', { style: { flex: '1 1 auto', minHeight: '0', minWidth: '0', overflow: view === 'workbench' ? 'hidden' : 'auto', padding: view === 'workbench' ? '0' : '0 12px 16px', display: tab?.visible === false ? 'none' : undefined } },
-      workspace.loading && !knownWorkspace ? uiStatus('正在读取管家工作区…') : workspace.error ? h('div', null, uiError(workspace.error),
-        h('button', { type: 'button', style: uiButton, onClick: refreshWorkspaceUi }, '重新读取工作区'))
-        : view === 'workspace' ? h(WorkspaceChats, { ctx }) : view === 'sources' ? h(ButlerSources, { key: sessionId, ctx, sessionId, canSelect: owns, initialRef: source?.sessionId === sessionId ? source.ref : undefined })
-          : view === 'workbench' ? h(ButlerWorkbench, { key: sessionId, ctx, initialTaskId: task?.sessionId === sessionId ? task.id : undefined })
-            : h(OrganizationResults, { key: sessionId, ctx, sessionId,
-              showSource: (ref: SourceRef) => { setSource({ sessionId, ref }); setView('sources') },
-              showTask: (id: string) => { setTask({ sessionId, id }); setView('workbench') } })))
+  if (!sessionId) {
+    return h('div', { className: 'butler-rightpane' }, h(ButlerStyles),
+      h('div', { className: 'butler-rightpane__body' }, h(EmptyState, {
+        title: '先打开一条会话',
+        description: '管家资料依附在当前原生会话上：打开任意会话后，这里会显示它是否属于管家的主题、来源与整理结果。',
+      })))
+  }
+  return h('div', {
+    'data-dsh-butler-workspace': sessionId,
+    className: 'butler-rightpane',
+    style: tab?.visible === false ? { display: 'none' } : undefined,
+  },
+  h(ButlerStyles),
+  h('div', { className: 'butler-rightpane__nav' }, h(Tablist, {
+    items: RIGHT_TABS.map(item => ({ id: item.id, label: item.label })),
+    activeId: view,
+    onChange: (id: string) => setView(id as RightView),
+    ariaLabel: '管家资料导航',
+    idPrefix: `butler-right-${sessionId}`,
+  })),
+  owns ? h(ButlerDailyTrial, { key: `trial:${sessionId}`, sessionId }) : null,
+  owns ? h(ButlerWorkspaceUsage, { key: sessionId, sessionId }) : null,
+  h('div', { className: view === 'workbench' ? 'butler-rightpane__body butler-rightpane__body--flush' : 'butler-rightpane__body butler-scroll' },
+    workspace.loading && !knownWorkspace ? uiStatus('正在读取管家工作区…') : workspace.error ? h('div', null, uiError(workspace.error),
+      h('button', { type: 'button', style: uiButton, onClick: refreshWorkspaceUi }, '重新读取工作区'))
+      : view === 'workspace' ? h(WorkspaceChats, { ctx }) : view === 'sources' ? h(ButlerSources, { key: sessionId, ctx, sessionId, canSelect: owns, initialRef: source?.sessionId === sessionId ? source.ref : undefined })
+        : view === 'workbench' ? h(ButlerWorkbench, { key: sessionId, ctx, initialTaskId: task?.sessionId === sessionId ? task.id : undefined })
+          : h(OrganizationResults, { key: sessionId, ctx, sessionId,
+            showSource: (ref: SourceRef) => { setSource({ sessionId, ref }); setView('sources') },
+            showTask: (id: string) => { setTask({ sessionId, id }); setView('workbench') } })))
 }
 
-/** Root sidebar entry is a navigation launchpad; it never adds a user turn. */
-export function ButlerWorkspaceEntry(props: { ctx?: Context; openView?: 'sources' }): unknown {
-  const ctx = props.ctx as Context, [error, setError] = useState<string | undefined>(undefined), [attempt, setAttempt] = useState(0)
-  useEffect(() => { let current = true; void openWorkspaceConversation(ctx, undefined, props.openView, () => current).then(result => { if (current && !result.ok) setError(result.message) }); return () => { current = false } }, [ctx, attempt, props.openView])
-  return error ? h('div', { style: { height: '100%', display: 'flex', flexDirection: 'column' } }, h('div', { style: { padding: '12px' } }, uiError(error), h('button', { type: 'button', style: uiButton, onClick: () => { setError(undefined); setAttempt(value => value + 1) } }, '重试打开管家对话')), h('div', { style: { flex: '1', minHeight: '0' } }, h(ButlerWorkbench, { ctx })))
-    : h('div', { role: 'status', style: { padding: '24px', color: T.dim } }, '正在准备管家工作区…')
+/**
+ * `main` 页：管家工作台本身。
+ *
+ * 0.1.0 前这里是一块"跳板"：挂载即调用 openWorkspaceConversation，把页面
+ * 换成某个管家会话；现在入口收敛为「侧栏行 = 工作台页」，跳转只在用户明确
+ * 点「和管家说话」时发生，失败也留在页面上说明原因，不再静默换屏。
+ */
+export function ButlerWorkspacePage(props: { ctx?: Context }): unknown {
+  const ctx = props.ctx as Context
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | undefined>(undefined)
+  const [failed, setFailed] = useState(false)
+  const openChat = (): void => {
+    if (busy) return
+    setBusy(true)
+    void openButlerConversation(ctx).then((outcome: NavOutcome) => {
+      setMessage(outcome.ok ? '已打开管家对话。' : outcome.reason)
+      setFailed(!outcome.ok)
+    }).finally(() => setBusy(false))
+  }
+  return h('div', { className: 'butler-page' },
+    h(ButlerStyles),
+    h('header', { className: 'butler-surface__head' },
+      h('h2', { className: 'butler-surface__title' }, '管家工作台'),
+      h('span', { className: 'butler-surface__sub' }, '今天、等你决定、资料与历史'),
+      h('span', { className: 'butler-surface__spacer' }),
+      h(Button, { variant: 'primary', size: 'sm', icon: h(ButlerBellGlyph, { size: 14 }), busy, onClick: openChat }, '和管家说话')),
+    message === undefined ? null : h('div', { className: 'butler-surface__head' },
+      h('span', { role: failed ? 'alert' : 'status', className: 'butler-surface__sub' }, message)),
+    h('div', { className: 'butler-surface__body' }, h(ButlerWorkbench, { ctx })))
 }
-
-export function ButlerSourcesEntry(props: { ctx?: Context }): unknown { return h(ButlerWorkspaceEntry, { ...props, openView: 'sources' }) }
 
 /** Source references and prepared text live above the native input, never in a second composer. */
 export function ButlerSourceDock(props: WorkspaceSlotProps): unknown {
@@ -166,16 +217,36 @@ export function ButlerSourceDock(props: WorkspaceSlotProps): unknown {
       .then(() => { if (isCurrent()) refreshWorkspaceUi() }, error => { if (isCurrent()) setMessage(String(error)) })
       .finally(() => { if (isCurrent()) setBusy(false) })
   }
-  return h('div', { 'data-dsh-butler-reference-scope': sessionId, style: { padding: '8px 0', color: T.text, fontSize: '12px' } },
-    h('div', { style: uiRow }, h('span', { style: uiMuted }, `本次参考 ${selected.length} 项 · ${new Set(selected.map(ref => JSON.stringify([ref.provider, ref.sessionId]))).size} 条对话`),
-      h('button', { type: 'button', style: uiButton, onClick: () => setMessage(openWorkspaceSidebar(ctx, 'sources').message) }, '选择来源'),
+  return h('div', { 'data-dsh-butler-reference-scope': sessionId, className: 'butler-dock' },
+    h('div', { className: 'butler-dock__row' },
+      h('span', { className: 'butler-surface__sub' }, `本次参考 ${selected.length} 项 · ${new Set(selected.map(ref => JSON.stringify([ref.provider, ref.sessionId]))).size} 条对话`),
+      h(Button, { size: 'sm', variant: 'secondary', onClick: () => setMessage(openWorkspaceSidebar(ctx, 'sources').message) }, '选择来源'),
       ...selected.slice(0, 3).map(ref => { const title = state.data?.items.find(item => item.provider === ref.provider && item.sessionId === ref.sessionId)?.title ?? ref.sessionId
-        return h('button', { key: `${ref.provider}:${ref.sessionId}:${ref.eventId ?? ''}`, type: 'button', disabled: busy, style: { ...uiButton, maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: `${ref.provider}:${ref.sessionId}${ref.eventId ? ` / 消息 ${ref.eventId}` : ' / 对话'}，点击移出本次参考`, onClick: () => remove(ref) }, `${ref.provider.toUpperCase()} · ${title}${ref.eventId ? ` · 消息 ${ref.eventId}` : ''} ×`)
-      }), selected.length > 3 ? h('button', { type: 'button', style: uiButton, onClick: () => setMessage(openWorkspaceSidebar(ctx, 'sources').message) }, `另有 ${selected.length - 3} 条参考`) : null),
-    draft ? h('div', { style: { marginTop: '8px' } }, h('label', null, '待发送的整理 / 确认指令', h('textarea', { readOnly: true, value: draft.text, rows: 2, style: { ...uiInput, resize: 'vertical', fontSize: '12px', maxHeight: '140px' }, 'aria-label': '待发送的管家指令' })),
-      h('div', { style: { ...uiRow, marginTop: '6px' } }, h('button', { type: 'button', style: uiButton, onClick: () => { const result = insertWorkspaceDraft(props.inputActions, draft.text); setMessage(result.message); if (result.ok) clearWorkspaceDraft(sessionId) } }, '加入原生输入框'),
-        h('button', { type: 'button', style: uiButton, onClick: () => { const isCurrent = operation(); void copyWorkspaceText(draft.text).then(result => { if (isCurrent()) setMessage(result.message) }) } }, '复制指令'),
-        h('button', { type: 'button', style: uiButton, onClick: () => clearWorkspaceDraft(sessionId) }, '收起指令'))) : null,
+        return h(Button, {
+          key: `${ref.provider}:${ref.sessionId}:${ref.eventId ?? ''}`,
+          size: 'sm',
+          variant: 'ghost',
+          disabled: busy,
+          title: `${ref.provider}:${ref.sessionId}${ref.eventId ? ` / 消息 ${ref.eventId}` : ' / 对话'}，点击移出本次参考`,
+          onClick: () => remove(ref),
+        }, `${ref.provider.toUpperCase()} · ${title}${ref.eventId ? ` · 消息 ${ref.eventId}` : ''} ×`)
+      }),
+      selected.length > 3 ? h(Button, { size: 'sm', variant: 'ghost', onClick: () => setMessage(openWorkspaceSidebar(ctx, 'sources').message) }, `另有 ${selected.length - 3} 条参考`) : null),
+    draft ? h('div', { className: 'butler-dock__draft' },
+      h('label', { htmlFor: 'butler-dock-draft', className: 'butler-surface__sub' }, '待发送的整理 / 确认指令'),
+      h('textarea', {
+        id: 'butler-dock-draft',
+        readOnly: true,
+        value: draft.text,
+        rows: 2,
+        className: 'butler-textarea',
+        style: { maxHeight: '140px', resize: 'vertical' },
+        'aria-label': '待发送的管家指令',
+      }),
+      h('div', { className: 'butler-dock__row' },
+        h(Button, { size: 'sm', variant: 'primary', onClick: () => { const result = insertWorkspaceDraft(props.inputActions, draft.text); setMessage(result.message); if (result.ok) clearWorkspaceDraft(sessionId) } }, '加入原生输入框'),
+        h(Button, { size: 'sm', variant: 'secondary', onClick: () => { const isCurrent = operation(); void copyWorkspaceText(draft.text).then(result => { if (isCurrent()) setMessage(result.message) }) } }, '复制指令'),
+        h(Button, { size: 'sm', variant: 'ghost', onClick: () => clearWorkspaceDraft(sessionId) }, '收起指令'))) : null,
     uiStatus(message), uiError(state.error))
 }
 

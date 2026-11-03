@@ -2,23 +2,17 @@
  * @dsh-external/dsh-butler - client half.
  * Build: tsdown -> lib/client.js (window.__ModuleLoader__.load registration).
  *
- * Contributes native navigation, composer scope and a right-hand page through
- * `slots.inject`, so load order against the
- * shell plugins does not matter and a shell that cannot serve a seat simply
- * leaves that one absent instead of failing its boot:
+ * 0.1.0 入口收敛后只保留四个对外入口（外加两个"只在你需要时出现"的挂载点）：
  *
- *   `conversation.session.header.actions`  the 管家模式 button (one click in)
- *   `sidebar.panellist`               a 管家 row beside Plugins/Schedule/Task board
- *   `main` (keyed by PANEL_ID)        the dedicated-chat navigation launchpad
- *   `conversation.view` (id butler)   the same workbench as a Conversation View tab
- *   `conversation.input.dock`        selected references and an unsent instruction
- *   `sidebar.right.pane.tab`         sources, organization and the workbench
+ *   `conversation.session.header.actions`  「管家」主按钮 + 「⋯」菜单（一个控件宽）
+ *   `sidebar.panellist`                    左侧栏一行「管家」，打开下面的工作台页
+ *   `main`（keyed by PANEL_ID）            管家工作台页（不再挂载即跳转）
+ *   `conversation.view`（id butler）       与工作台同一组件，放进对话视图页签
+ *   `conversation.input.dock`              参考范围条：只在管家主题会话渲染
+ *   `sidebar.right.pane.tab`               右栏「管家资料」页签
  *
- * The `name:` literals below are deliberately written at the call site: the
- * injector's pre-injection check greps the BUILT bundle for `name: '<seat>'`,
- * and a named constant is folded into a bare identifier by the bundler - the
- * runtime is fine either way, but a folded name fails that check and blocks
- * injection (learned the hard way on the first P0 build).
+ * 「对话来源」原来单独占一个侧栏行 + 一个 main 页；现在合并进工作台页与右栏，
+ * 侧栏不再出现两个同样式、只差跳转目标的入口。
  *
  * React is NOT bundled: the factory receives it from the web shell's module
  * loader (`require('react')`, same as every shipped client plugin), which is
@@ -32,14 +26,13 @@ import { ButlerPanelIcon } from './icon.ts'
 import { PANEL_ID, PANEL_ORDER } from './ids.ts'
 import { ButlerWorkbench } from './panel.ts'
 import { clientService } from './navigate.ts'
-import { ButlerRightPane, ButlerSourceDock, ButlerSourcesEntry, ButlerWorkspaceEntry } from './workspace-panel.ts'
+import { ButlerRightPane, ButlerSourceDock, ButlerWorkspacePage } from './workspace-panel.ts'
 
 /** Required core services; optional native workspace/rightbar faces are resolved per action. */
 export const inject = ['slots', 'layout']
 
 /**
- * One seat contribution: the human name used in the console report, the
- * component it renders, and the registration options the shell reads.
+ * 一次席位贡献：控制台报告用的人名、渲染的组件、外壳读取的注册选项。
  */
 interface SeatContribution {
   /** Human name used in the console report. */
@@ -50,30 +43,27 @@ interface SeatContribution {
   options: Record<string, unknown>
 }
 
-/** The four seats this plugin occupies, in contribution order. */
+/** 四个入口席位，按贡献顺序排列。 */
 const CONTRIBUTIONS: readonly SeatContribution[] = [
-  // Header button: the owner's requested one-click way in.
+  // 会话头部主入口：一个「管家」按钮 + 一个「⋯」菜单。
   {
-    label: '会话头部按钮',
+    label: '会话头部入口',
     component: ButlerHeaderAction,
-    options: { id: PANEL_ID, order: 40, label: () => '管家模式' },
+    options: { id: PANEL_ID, order: 40, label: () => '管家' },
   },
-  // Sidebar row: the shell owns the button box, label, tooltip and active
-  // highlight; this contribution is only the id, the order and the glyph.
+  // 侧栏行：外壳拥有按钮盒、标签、提示与选中高亮；这里只给 id、顺序和 glyph。
   {
     label: '侧栏行',
     component: ButlerPanelIcon,
     options: { id: PANEL_ID, order: PANEL_ORDER, label: () => '管家' },
   },
-  // Center-column page: mounted by the layout only while this panel is
-  // selected, so the Conversation keeps the center column the rest of the time.
+  // 中栏工作台页：由 layout 只在选中该面板时挂载，其余时间对话保留中栏。
   {
-    label: '专属工作区入口',
-    component: ButlerWorkspaceEntry,
+    label: '工作台页面',
+    component: ButlerWorkspacePage,
     options: { key: PANEL_ID },
   },
-  // Conversation View tab: the same workbench inside a chat session, beside the
-  // shipped 对话 / 轨迹 views.
+  // 对话视图页签：同一个工作台，放在会话的「对话 / 轨迹 / 管家」页签里。
   {
     label: '对话视图',
     component: ButlerWorkbench,
@@ -82,18 +72,10 @@ const CONTRIBUTIONS: readonly SeatContribution[] = [
 ]
 
 /**
- * Mount the butler's sidebar row, workbench page and Conversation View tab.
+ * 挂载管家的四个入口席位与两个上下文挂载点。
  *
- * Each seat is registered inside its own `slots.inject` (the callback runs only
- * once the owner declares the seat) and inside its own try/catch: a plugin's
- * `apply` throwing fails the whole web boot, so one unavailable seat must not
- * cost the others.
- *
- * The seat names are spelled at the `register(` call rather than read from the
- * table above on purpose: the injector's pre-injection check greps the built
- * bundle with `register\(\{[\s\S]*?name:\s*['"](<known seat>)['"]`, whose
- * lazy-but-unanchored middle spans anywhere in the file, so a `name:` written
- * next to its own `register(` is what keeps that check honest.
+ * 每个席位在自己的 `slots.inject` 与自己的 try/catch 里注册：一个席位不可用
+ * 不能让整个 web boot 失败，也不该连带其它席位。
  * @param ctx - client root context (service: slots).
  */
 export function apply(ctx: Context): void {
@@ -104,7 +86,7 @@ export function apply(ctx: Context): void {
     try {
       return slots.register({ name: 'conversation.session.header.actions', ...CONTRIBUTIONS[0]!.options, inject: () => ({ ctx }) }, ButlerHeaderAction as never)
     } catch (error) {
-      console.error('[dsh-butler] 会话头部按钮 注册失败：', error)
+      console.error('[dsh-butler] 会话头部入口 注册失败：', error)
       return () => {}
     }
   }
@@ -122,10 +104,9 @@ export function apply(ctx: Context): void {
 
   disposers.push(slots.inject('main', () => {
     try {
-      // The workbench gets `ctx` so its 和管家说话 button can navigate; the
-      // layout passes `inject` results to the component as props, the same way
-      // the task board hands its controller to the `main` page.
-      return slots.register({ name: 'main', ...CONTRIBUTIONS[2]!.options, inject: () => ({ ctx }) }, ButlerWorkspaceEntry as never)
+      // The page gets `ctx` so its 和管家说话 button can navigate; the layout
+      // passes `inject` results to the component as props.
+      return slots.register({ name: 'main', ...CONTRIBUTIONS[2]!.options, inject: () => ({ ctx }) }, ButlerWorkspacePage as never)
     } catch (error) {
       console.error('[dsh-butler] 工作台页面 注册失败：', error)
       return () => {}
@@ -165,22 +146,11 @@ export function apply(ctx: Context): void {
     }
   }))
 
-  // A first-level source entry in the native left navigation. Its landing page
-  // opens a managed chat, then the arriving native composer opens the right page.
-  disposers.push(slots.inject('sidebar.panellist', () => {
-    try { return slots.register({ name: 'sidebar.panellist', id: 'butler-sources', order: PANEL_ORDER + 1, label: () => '对话来源' }, ButlerPanelIcon) }
-    catch (error) { console.error('[dsh-butler] 对话来源入口 注册失败：', error); return () => {} }
-  }))
-  disposers.push(slots.inject('main', () => {
-    try { return slots.register({ name: 'main', key: 'butler-sources', inject: () => ({ ctx }) }, ButlerSourcesEntry as never) }
-    catch (error) { console.error('[dsh-butler] 对话来源导航 注册失败：', error); return () => {} }
-  }))
-
   ctx.effect(() => {
     return () => {
       for (const dispose of disposers.splice(0)) dispose()
     }
   }, 'dsh-butler: seats')
 
-  ctx.logger.info('[dsh-butler] 客户端已挂载：专属工作区入口、会话头部、参考范围、原生右栏及工作台')
+  ctx.logger.info('[dsh-butler] 客户端已挂载：会话头部入口、侧栏行、工作台页、对话视图、参考范围与右栏')
 }

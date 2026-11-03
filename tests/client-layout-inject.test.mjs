@@ -63,10 +63,10 @@ async function mounted(plugin, exercise) {
   await consumer.await()
   try {
     assert.equal(provider.state, 2); assert.equal(consumer.state, 2)
-    assert.deepEqual(registrations.map(row => row.options.name), ['conversation.session.header.actions', 'sidebar.panellist', 'main', 'conversation.view', 'conversation.input.dock', 'sidebar.right.pane.tab', 'sidebar.panellist', 'main'])
+    assert.deepEqual(registrations.map(row => row.options.name), ['conversation.session.header.actions', 'sidebar.panellist', 'main', 'conversation.view', 'conversation.input.dock', 'sidebar.right.pane.tab'])
     assert.equal(tabTypes[0].kind, 'butler-workspace')
     assert.equal(registrations.find(row => row.options.name === 'sidebar.right.pane.tab').options.key, tabTypes[0].id, 'Native registry and body use the same exact public identity')
-    assert.equal(registrations.find(row => row.options.id === 'butler-sources').options.label(), '对话来源')
+    assert.equal(registrations.find(row => row.options.name === 'sidebar.panellist').options.id, 'butler')
     const headerAction = registrations[0], ownedContext = headerAction.options.inject().ctx
     return await exercise({ headerAction, ownedContext, selected })
   } finally { await consumer.dispose(); await provider.dispose() }

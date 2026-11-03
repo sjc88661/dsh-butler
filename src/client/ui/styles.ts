@@ -1966,6 +1966,166 @@ const RESPONSIVE_RULES = `
 }
 `
 
+/* -------------------------------------------------------------------------- */
+/* 18. Butler surfaces (header bar / main page / right pane / input dock)     */
+/* -------------------------------------------------------------------------- */
+
+const LAYOUT_RULES = `
+.butler-surface {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.butler-surface__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.butler-surface__title {
+  position: relative;
+  margin: 0;
+  padding-left: 10px;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.butler-surface__title::before {
+  content: '';
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--butler-accent);
+}
+
+.butler-surface__sub {
+  min-width: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.butler-surface__spacer {
+  flex: 1 1 auto;
+}
+
+.butler-surface__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.butler-headerbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.butler-headerbar__notice {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.butler-headerbar__notice[role='alert'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.butler-headerbar__path {
+  margin-left: 6px;
+  font-size: 11px;
+}
+
+.butler-rightpane {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.butler-rightpane__nav {
+  flex: 0 0 auto;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.butler-rightpane__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+}
+
+.butler-rightpane__body--flush {
+  padding: 0;
+}
+
+.butler-dock {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.butler-dock__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.butler-dock__draft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.butler-page {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+}
+`
+
 /**
  * The complete butler stylesheet.
  *
@@ -1993,6 +2153,7 @@ export const BUTLER_CSS: string = [
   SCROLLBAR_RULES,
   MOTION_RULES,
   RESPONSIVE_RULES,
+  LAYOUT_RULES,
 ].join('\n')
 
 /** Props of {@link ButlerStyles}; the component is intentionally prop-free. */
