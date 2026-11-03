@@ -70,6 +70,20 @@ const ACCENT_RULE = `
 
 /** Token-backed helpers consumers can compose without writing new CSS. */
 const UTILITY_RULES = `
+/*
+ * Optional panel root. Establishes the density baseline (13/20, tabular
+ * figures, primary label colour) once for a whole butler subtree instead of
+ * repeating it on every block. It inherits; it never sets a font family, so the
+ * host's own stack keeps winning.
+ */
+.butler-root {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+}
+
 .butler-sr-only {
   position: absolute;
   width: 1px;
@@ -230,7 +244,7 @@ const BUTTON_RULES = `
 /*
  * Primary: the brand fill is the theme's own emphasis surface, so the label is
  * the base surface colour - the same contrast pairing the host uses for
- * `--dsw-alias-label-primary-foreground`, but expressed only with tokens from
+ * '--dsw-alias-label-primary-foreground', but expressed only with tokens from
  * the allowed list (brand inverts against bg-base in both themes).
  */
 .butler-btn--primary {
@@ -343,7 +357,7 @@ const SECTION_RULES = `
 .butler-section__toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -358,6 +372,11 @@ const SECTION_RULES = `
 .butler-section__toggle:focus-visible {
   outline: 2px solid var(--dsw-alias-brand-primary);
   outline-offset: 2px;
+}
+
+/* The only affordance the disclosure has room for: the chevron brightens. */
+.butler-section__toggle:hover .butler-section__chevron {
+  color: var(--dsw-alias-label-primary);
 }
 
 .butler-section__chevron {
@@ -431,6 +450,13 @@ const SECTION_RULES = `
   gap: 8px;
   min-width: 0;
 }
+
+/* A collapsed section keeps its body mounted ('hidden') so local state survives
+ * a collapse/expand round trip. The author 'display: flex' above would beat the
+ * UA's '[hidden] { display: none }', so the collapsed state restates it. */
+.butler-section__body[hidden] {
+  display: none;
+}
 `
 
 /* -------------------------------------------------------------------------- */
@@ -466,7 +492,7 @@ const CARD_RULES = `
 .butler-card__heading {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -578,7 +604,7 @@ const PILL_RULES = `
 
 /*
  * Status dot. Size comes from the component as an inline custom property
- * (geometry, not colour); the tone supplies `currentColor`, and the halo is the
+ * (geometry, not colour); the tone supplies 'currentColor', and the halo is the
  * same colour at low alpha - the host's StateDot treatment, rebuilt without its
  * pixel-chase SVG because the butler ledger only needs "steady" states.
  */
@@ -694,7 +720,7 @@ const FORM_RULES = `
   font: inherit;
   font-size: 13px;
   line-height: 20px;
-  padding: 5px 8px;
+  padding: 4px 8px;
   transition:
     border-color 120ms var(--ds-ease-in-out),
     background-color 120ms var(--ds-ease-in-out);
@@ -768,11 +794,6 @@ const TOOLBAR_RULES = `
   padding: 8px 0;
   background: var(--dsw-alias-bg-base);
 }
-
-.butler-toolbar__spacer {
-  flex: 1 1 auto;
-  min-width: 0;
-}
 `
 
 /* -------------------------------------------------------------------------- */
@@ -823,7 +844,7 @@ const STATE_RULES = `
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border: 1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 32%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent);
@@ -900,7 +921,7 @@ const STATE_RULES = `
 .butler-error-state__title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
   font-size: 13px;
   line-height: 20px;
@@ -969,7 +990,7 @@ const DATA_RULES = `
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
-  padding: 2px 0;
+  padding: 4px 0;
 }
 
 .butler-kv__label {
@@ -1022,7 +1043,7 @@ const DATA_RULES = `
 .butler-meta__item {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -1081,7 +1102,7 @@ const BANNER_RULES = `
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-2);
@@ -1095,16 +1116,15 @@ const BANNER_RULES = `
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
+  width: 16px;
+  height: 16px;
   color: var(--dsw-alias-label-secondary);
 }
 
 .butler-banner__body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1173,9 +1193,9 @@ const BANNER_RULES = `
 .butler-stat {
   display: inline-flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-1);
@@ -1225,21 +1245,23 @@ const TAB_RULES = `
 .butler-tabs {
   display: flex;
   align-items: flex-end;
+  flex-wrap: wrap;
   gap: 16px;
   min-width: 0;
-  padding: 0 2px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
-  overflow-x: auto;
+  /* Rail drawn as an inset shadow instead of a border: the active tab's 2px
+   * underline then sits inside the strip's own box, so a strip that ever gains
+   * overflow cannot clip its own selection marker. */
+  box-shadow: inset 0 -1px 0 var(--dsw-alias-border-l2);
 }
 
 .butler-tab {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex: none;
   margin: 0;
-  padding: 7px 1px 9px;
+  padding: 8px 4px;
   border: 0;
   border-radius: 4px 4px 0 0;
   background: transparent;
@@ -1265,7 +1287,7 @@ const TAB_RULES = `
   content: '';
   position: absolute;
   right: 0;
-  bottom: -1px;
+  bottom: 0;
   left: 0;
   height: 2px;
   border-radius: 2px 2px 0 0;
@@ -1320,7 +1342,7 @@ const TABLE_RULES = `
 }
 
 .butler-table th {
-  padding: 6px 8px;
+  padding: 8px;
   border-bottom: 1px solid var(--dsw-alias-border-l2);
   font-size: 12px;
   line-height: 18px;
@@ -1331,7 +1353,7 @@ const TABLE_RULES = `
 }
 
 .butler-table td {
-  padding: 6px 8px;
+  padding: 8px;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
   vertical-align: top;
   min-width: 0;
@@ -1634,7 +1656,7 @@ const MENU_RULES = `
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 30px;
+  min-height: 32px;
   margin: 0;
   padding: 4px 8px;
   border: 0;
@@ -1648,9 +1670,14 @@ const MENU_RULES = `
   cursor: pointer;
 }
 
-/* Hover and keyboard-active share one look: the active row is programmatically
- * focused, so `:hover` alone would leave keyboard users with no cursor. */
-.butler-menu__item:hover:not(:disabled),
+/* Hover is a fill-only affordance; the keyboard-active row also gets the ring.
+ * The row is focused programmatically by the arrow-key walk, so ':focus-visible'
+ * cannot be relied on alone - hence the data-active twin. */
+.butler-menu__item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent);
+}
+
+.butler-menu__item:focus-visible,
 .butler-menu__item[data-active='true'] {
   background: color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent);
   outline: 2px solid var(--dsw-alias-brand-primary);
@@ -1708,21 +1735,21 @@ const MENU_RULES = `
 
 .butler-menu__separator {
   height: 1px;
-  margin: 4px 6px;
+  margin: 4px;
   background: var(--dsw-alias-border-l1);
 }
 
 .butler-menu__group {
-  padding: 6px 8px 2px;
+  padding: 4px 8px;
   font-size: 11px;
   line-height: 16px;
   color: var(--dsw-alias-label-secondary);
 }
 
 /*
- * CSS-only tooltip: the label is the `data-tip` attribute, shown on hover and
+ * CSS-only tooltip: the label is the 'data-tip' attribute, shown on hover and
  * on focus-within so a keyboard user reaches it too. It never replaces the
- * accessible name of its trigger (IconButton's `label` does that).
+ * accessible name of its trigger (IconButton's 'label' does that).
  */
 .butler-tip {
   position: relative;
@@ -1739,7 +1766,7 @@ const MENU_RULES = `
   box-sizing: border-box;
   width: max-content;
   max-width: 40ch;
-  padding: 3px 7px;
+  padding: 4px 8px;
   transform: translateX(-50%);
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
@@ -1794,7 +1821,7 @@ const NOTICE_RULES = `
 .butler-notices {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -1802,7 +1829,7 @@ const NOTICE_RULES = `
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-radius: 6px;
   border-left: 3px solid var(--dsw-alias-label-secondary);
   background: var(--dsw-alias-bg-layer-2);
