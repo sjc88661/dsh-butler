@@ -1,0 +1,49 @@
+✔ readText only returns undefined for ENOENT and propagates other read failures (3.8606ms)
+✔ a malformed task line rejects upsert and preserves every original byte (9.3619ms)
+✔ corrupt pending JSON cannot turn into an empty queue or be overwritten (7.2659ms)
+✔ memos with valid JSON but an invalid record shape fail closed (10.7803ms)
+✔ task JSONL also validates record structure rather than only parsing JSON (11.7766ms)
+✔ the first mutation backs up the original bytes and records a SHA256 manifest (28.1522ms)
+✔ repeating an operationId returns its original result and never reapplies its patch (21.9147ms)
+✔ an operationId cannot be reused for another local target (14.5112ms)
+✔ retrying a status operation on a later date does not append another daily entry (36.3115ms)
+✖ a status transition commits attempts and origin with its daily entry while protecting identity (24.253ms)
+✔ a process stopped after prepare recovers the same operation exactly once (289.2505ms)
+✔ a recovery filesystem failure is exposed as degraded StorageError (237.6797ms)
+✔ approval and memo decisions are journaled and remain idempotent across restart (152.1828ms)
+✔ a changed migration backup refuses later business writes (18.6597ms)
+✔ invalid UTF-8 state is preserved rather than decoded and rewritten (6.4132ms)
+✔ multi-file recovery first detects human edits and leaves all files untouched (110.2268ms)
+✔ multi-file recovery completes the remaining local snapshots exactly once (168.3774ms)
+✔ boot restores state and marks running tasks interrupted without replaying external actions (146.8877ms)
+✔ bad append-only receipts and usage report skipped rows without blocking a task write (14.6591ms)
+✔ a malformed operations journal fails closed and preserves snapshot and journal bytes (13.8735ms)
+✔ atomic writes use unique temporary names and clean temporary files after success (9.1425ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 20
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1448.5455
+
+✖ failing tests:
+
+test at tests\storage.test.mjs:133:1
+✖ a status transition commits attempts and origin with its daily entry while protecting identity (24.253ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:141:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

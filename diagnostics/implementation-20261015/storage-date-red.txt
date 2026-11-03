@@ -1,0 +1,44 @@
+✔ readText only returns undefined for ENOENT and propagates other read failures (3.6759ms)
+✔ a malformed task line rejects upsert and preserves every original byte (9.2684ms)
+✔ corrupt pending JSON cannot turn into an empty queue or be overwritten (8.3367ms)
+✔ memos with valid JSON but an invalid record shape fail closed (10.2775ms)
+✔ task JSONL also validates record structure rather than only parsing JSON (8.6993ms)
+✔ the first mutation backs up the original bytes and records a SHA256 manifest (26.5333ms)
+✔ repeating an operationId returns its original result and never reapplies its patch (20.4466ms)
+✔ an operationId cannot be reused for another local target (13.6099ms)
+✖ retrying a status operation on a later date does not append another daily entry (35.6897ms)
+✔ a process stopped after prepare recovers the same operation exactly once (297.3506ms)
+✔ a recovery filesystem failure is exposed as degraded StorageError (296.5847ms)
+✔ approval and memo decisions are journaled and remain idempotent across restart (164.4723ms)
+✔ a changed migration backup refuses later business writes (19.7651ms)
+✔ invalid UTF-8 state is preserved rather than decoded and rewritten (6.5409ms)
+✔ multi-file recovery first detects human edits and leaves all files untouched (131.0584ms)
+✔ multi-file recovery completes the remaining local snapshots exactly once (159.2511ms)
+✔ boot restores state and marks running tasks interrupted without replaying external actions (166.7432ms)
+✔ bad append-only receipts and usage report skipped rows without blocking a task write (15.0189ms)
+✔ a malformed operations journal fails closed and preserves snapshot and journal bytes (16.2905ms)
+✔ atomic writes use unique temporary names and clean temporary files after success (11.668ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 19
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1543.5986
+
+✖ failing tests:
+
+test at tests\storage.test.mjs:123:1
+✖ retrying a status operation on a later date does not append another daily entry (35.6897ms)
+  Error [StorageError]: 存储 degraded：E:\opendots\dsh-butler\tests\.tmp\storage-hqDDys\state\store-operations.jsonl operationId dated-status 操作标识冲突；不能用于其他目标
+      at fail (file:///E:/opendots/dsh-butler/src/host/store.ts:55:9)
+      at previousOperation (file:///E:/opendots/dsh-butler/src/host/store.ts:281:5)
+      at commitFiles (file:///E:/opendots/dsh-butler/src/host/store.ts:303:22)
+      at Module.setTaskStatus (file:///E:/opendots/dsh-butler/src/host/ledger.ts:670:10)
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:128:27)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    diagnostics: [ { path: 'E:\\opendots\\dsh-butler\\tests\\.tmp\\storage-hqDDys\\state\\store-operations.jsonl', kind: 'journal', message: 'operationId dated-status 操作标识冲突；不能用于其他目标', blocking: true } ]
+  }

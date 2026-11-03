@@ -1,0 +1,257 @@
+✖ readText only returns undefined for ENOENT and propagates other read failures (5.1682ms)
+✖ a malformed task line rejects upsert and preserves every original byte (8.3679ms)
+✖ corrupt pending JSON cannot turn into an empty queue or be overwritten (5.3136ms)
+✖ memos with valid JSON but an invalid record shape fail closed (6.1852ms)
+✖ task JSONL also validates record structure rather than only parsing JSON (7.3845ms)
+✖ the first mutation backs up the original bytes and records a SHA256 manifest (6.3032ms)
+✖ repeating an operationId returns its original result and never reapplies its patch (8.869ms)
+✖ an operationId cannot be reused for another local target (7.0918ms)
+✖ a process stopped after prepare recovers the same operation exactly once (197.1675ms)
+✖ multi-file recovery first detects human edits and leaves all files untouched (5.306ms)
+✔ boot restores state and marks running tasks interrupted without replaying external actions (112.775ms)
+✖ bad append-only receipts and usage report skipped rows without blocking a task write (5.4328ms)
+✖ a malformed operations journal fails closed and preserves snapshot and journal bytes (6.1365ms)
+✖ atomic writes use unique temporary names and clean temporary files after success (9.2197ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 1
+ℹ fail 13
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 508.6139
+
+✖ failing tests:
+
+test at tests\storage.test.mjs:44:1
+✖ readText only returns undefined for ENOENT and propagates other read failures (5.1682ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:46:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests\storage.test.mjs:49:1
+✖ a malformed task line rejects upsert and preserves every original byte (8.3679ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:52:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /损坏|degraded|corrupt|JSON/i,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests\storage.test.mjs:61:1
+✖ corrupt pending JSON cannot turn into an empty queue or be overwritten (5.3136ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:64:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /损坏|degraded|corrupt|JSON/i,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests\storage.test.mjs:69:1
+✖ memos with valid JSON but an invalid record shape fail closed (6.1852ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:73:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /损坏|degraded|corrupt|schema|结构|JSON/i,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests\storage.test.mjs:79:1
+✖ task JSONL also validates record structure rather than only parsing JSON (7.3845ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:83:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests\storage.test.mjs:88:1
+✖ the first mutation backs up the original bytes and records a SHA256 manifest (6.3032ms)
+  AssertionError [ERR_ASSERTION]: 可恢复的本地存储 API 应存在
+  + actual - expected
+  
+  + 'undefined'
+  - 'function'
+  
+      at requireStore (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:35:34)
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:92:3)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'undefined',
+    expected: 'function',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\storage.test.mjs:103:1
+✖ repeating an operationId returns its original result and never reapplies its patch (8.869ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+      createdAt: '2026-10-15T04:59:05.778Z',
+      id: 'one',
+  +   note: '后续更新',
+      status: 'pending',
+      title: '原题',
+  +   updatedAt: '2026-10-15T04:59:05.780Z'
+  -   updatedAt: '2026-10-15T04:59:05.778Z'
+    }
+  
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:107:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { title: '原题', id: 'one', status: 'pending', createdAt: '2026-10-15T04:59:05.778Z', updatedAt: '2026-10-15T04:59:05.780Z', note: '后续更新' },
+    expected: { title: '原题', id: 'one', status: 'pending', createdAt: '2026-10-15T04:59:05.778Z', updatedAt: '2026-10-15T04:59:05.778Z' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests\storage.test.mjs:116:1
+✖ an operationId cannot be reused for another local target (7.0918ms)
+  AssertionError [ERR_ASSERTION]: Missing expected exception.
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:119:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: /operation|操作|冲突/i,
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at tests\storage.test.mjs:123:1
+✖ a process stopped after prepare recovers the same operation exactly once (197.1675ms)
+  AssertionError [ERR_ASSERTION]: file:///E:/opendots/dsh-butler/[eval1]:3
+      const first = ledger.getTask('recover'); assert.equal(first.title,'可恢复');
+                                                                  ^
+  
+  TypeError: Cannot read properties of undefined (reading 'title')
+      at file:///E:/opendots/dsh-butler/[eval1]:3:65
+  
+  Node.js v24.15.0
+  
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:139:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\storage.test.mjs:144:1
+✖ multi-file recovery first detects human edits and leaves all files untouched (5.306ms)
+  AssertionError [ERR_ASSERTION]: 可恢复的本地存储 API 应存在
+  + actual - expected
+  
+  + 'undefined'
+  - 'function'
+  
+      at requireStore (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:35:34)
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:145:3)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'undefined',
+    expected: 'function',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\storage.test.mjs:180:1
+✖ bad append-only receipts and usage report skipped rows without blocking a task write (5.4328ms)
+  AssertionError [ERR_ASSERTION]: 可恢复的本地存储 API 应存在
+  + actual - expected
+  
+  + 'undefined'
+  - 'function'
+  
+      at requireStore (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:35:34)
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:181:3)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'undefined',
+    expected: 'function',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests\storage.test.mjs:193:1
+✖ a malformed operations journal fails closed and preserves snapshot and journal bytes (6.1365ms)
+  Error: ENOENT: no such file or directory, open 'E:\opendots\dsh-butler\tests\.tmp\storage-sjSPvS\state\store-operations.jsonl'
+      at readFileSync (node:fs:441:20)
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:195:33)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    errno: -4058,
+    code: 'ENOENT',
+    syscall: 'open',
+    path: 'E:\\opendots\\dsh-butler\\tests\\.tmp\\storage-sjSPvS\\state\\store-operations.jsonl'
+  }
+
+test at tests\storage.test.mjs:202:1
+✖ atomic writes use unique temporary names and clean temporary files after success (9.2197ms)
+  Error: ENOENT: no such file or directory, open 'E:\opendots\dsh-butler\tests\.tmp\storage-sjSPvS\atomic.txt.tmp-40440-7'
+      at readFileSync (node:fs:441:20)
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:210:18)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    errno: -4058,
+    code: 'ENOENT',
+    syscall: 'open',
+    path: 'E:\\opendots\\dsh-butler\\tests\\.tmp\\storage-sjSPvS\\atomic.txt.tmp-40440-7'
+  }

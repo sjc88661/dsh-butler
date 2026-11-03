@@ -1,0 +1,56 @@
+✖ a missing snapshot is decoded from the same missing read without a second file read (119.2497ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 234.2476
+
+✖ failing tests:
+
+test at tests\storage.test.mjs:349:1
+✖ a missing snapshot is decoded from the same missing read without a second file read (119.2497ms)
+  AssertionError [ERR_ASSERTION]: node:internal/modules/run_main:107
+      triggerUncaughtException(
+      ^
+  
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+      expectedBefore: null,
+  +   value: [
+  +     {
+  +       id: 'created-between-reads'
+  +     }
+  +   ]
+  -   value: []
+    }
+  
+      at file:///E:/opendots/dsh-butler/[eval1]:7:12 {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { value: [ { id: 'created-between-reads' } ], expectedBefore: null },
+    expected: { value: [], expectedBefore: null },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+  
+  Node.js v24.15.0
+  
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:361:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

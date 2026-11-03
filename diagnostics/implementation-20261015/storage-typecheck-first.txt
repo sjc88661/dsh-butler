@@ -1,0 +1,10 @@
+build preflight: {"checkout":"C:\\Users\\申俊超\\dsh-harness","node":"24.15.0","typescript":"6.0.3","tsdown":"0.22.2"}
+build: host typecheck
+src/host/tools.ts(216,58): error TS2339: Property 'receipt' does not exist on type 'ExecutionContexts'.
+src/index.ts(41,10): error TS2724: '"./host/execution-context.ts"' has no exported member named 'installExecutionContext'. Did you mean 'ExecutionContexts'?
+src/index.ts(173,15): error TS7006: Parameter 'root' implicitly has an 'any' type.
+src/index.ts(174,18): error TS7006: Parameter 'row' implicitly has an 'any' type.
+src/index.ts(175,40): error TS2339: Property 'stop' does not exist on type 'ExecutionContexts'.
+src/index.ts(238,52): error TS2339: Property 'forCall' does not exist on type 'ExecutionContexts'.
+src/index.ts(266,115): error TS2339: Property 'status' does not exist on type 'ExecutionContexts'.
+build preflight/stage error: host typecheck failed (exit 2); fix the reported error before another build

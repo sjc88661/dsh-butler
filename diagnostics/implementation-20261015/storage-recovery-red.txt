@@ -1,0 +1,75 @@
+✔ readText only returns undefined for ENOENT and propagates other read failures (6.0486ms)
+✔ a malformed task line rejects upsert and preserves every original byte (10.0088ms)
+✔ corrupt pending JSON cannot turn into an empty queue or be overwritten (7.283ms)
+✔ memos with valid JSON but an invalid record shape fail closed (10.7896ms)
+✔ task JSONL also validates record structure rather than only parsing JSON (8.9469ms)
+✔ the first mutation backs up the original bytes and records a SHA256 manifest (25.4202ms)
+✔ repeating an operationId returns its original result and never reapplies its patch (21.2514ms)
+✔ an operationId cannot be reused for another local target (15.0262ms)
+✔ a process stopped after prepare recovers the same operation exactly once (243.7112ms)
+✖ a recovery filesystem failure is exposed as degraded StorageError (223.4515ms)
+✔ approval and memo decisions are journaled and remain idempotent across restart (150.8877ms)
+✔ a changed migration backup refuses later business writes (18.3678ms)
+✔ invalid UTF-8 state is preserved rather than decoded and rewritten (6.2524ms)
+✔ multi-file recovery first detects human edits and leaves all files untouched (111.4268ms)
+✔ boot restores state and marks running tasks interrupted without replaying external actions (133.4193ms)
+✔ bad append-only receipts and usage report skipped rows without blocking a task write (14.8073ms)
+✔ a malformed operations journal fails closed and preserves snapshot and journal bytes (14.4314ms)
+✔ atomic writes use unique temporary names and clean temporary files after success (9.1511ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 17
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1151.719
+
+✖ failing tests:
+
+test at tests\storage.test.mjs:144:1
+✖ a recovery filesystem failure is exposed as degraded StorageError (223.4515ms)
+  AssertionError [ERR_ASSERTION]: node:internal/modules/run_main:107
+      triggerUncaughtException(
+      ^
+  
+  AssertionError [ERR_ASSERTION]: The validation function is expected to return "true". Received false
+  
+  Caught error:
+  
+  Error: simulated access failure
+      at file:///E:/opendots/dsh-butler/[eval1]:5:12 {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: simulated access failure
+        at fs.renameSync (file:///E:/opendots/dsh-butler/[eval1]:3:166)
+        at writeBytes (file:///E:/opendots/dsh-butler/src/host/vault.ts:153:5)
+        at writeText (file:///E:/opendots/dsh-butler/src/host/vault.ts:131:3)
+        at Module.recoverOperations (file:///E:/opendots/dsh-butler/src/host/store.ts:253:53)
+        at file:///E:/opendots/dsh-butler/[eval1]:5:29
+        at getActual (node:assert:611:5)
+        at strict.throws (node:assert:759:24)
+        at file:///E:/opendots/dsh-butler/[eval1]:5:12 {
+      code: 'EACCES'
+    },
+    expected: [Function (anonymous)],
+    operator: 'throws',
+    diff: 'simple'
+  }
+  
+  Node.js v24.15.0
+  
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///E:/opendots/dsh-butler/tests/storage.test.mjs:159:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

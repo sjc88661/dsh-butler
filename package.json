@@ -1,0 +1,62 @@
+{
+  "name": "@dsh-external/dsh-butler",
+  "version": "0.0.22+release.1",
+  "description": "管家模式：个人助理内核（长期记忆 + 任务账本 + 证据守卫 + 资料版本 + 可加装技能包）",
+  "private": true,
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "files": [
+    "lib"
+  ],
+  "license": "BSD-3-Clause",
+  "peerDependencies": {
+    "@deepseek-ai/dsh-agent": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
+    "cordis": ">=4.0.0-rc <5",
+    "@deepseek-ai/schemastery": "^3.18.2",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.0.1-rc <2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "6.0.3",
+    "tsdown": "0.22.2"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:check": "node scripts/build.mjs --check",
+    "typecheck": "node scripts/build.mjs --typecheck",
+    "build:client": "node scripts/build.mjs --no-pack",
+    "test": "node --test tests/*.test.mjs",
+    "cost-probe": "node scripts/cost-probe.mjs"
+  },
+  "exports": {
+    "./reminder-delivery": {
+      "types": "./lib/types/reminder-delivery.d.ts",
+      "default": "./lib/reminder-delivery.js"
+    },
+    "./channels": {
+      "types": "./lib/types/channels.d.ts",
+      "default": "./lib/channels.js"
+    },
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ],
+      "platform": "web"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+✔ readText only returns undefined for ENOENT and propagates other read failures (3.7267ms)
+✔ a malformed task line rejects upsert and preserves every original byte (10.2207ms)
+✔ corrupt pending JSON cannot turn into an empty queue or be overwritten (11.1248ms)
+✔ memos with valid JSON but an invalid record shape fail closed (11.0458ms)
+✔ task JSONL also validates record structure rather than only parsing JSON (8.5339ms)
+✔ the first mutation backs up the original bytes and records a SHA256 manifest (32.1416ms)
+✔ repeating an operationId returns its original result and never reapplies its patch (25.6936ms)
+✔ an operationId cannot be reused for another local target (18.4096ms)
+✔ a process stopped after prepare recovers the same operation exactly once (263.9871ms)
+✔ a recovery filesystem failure is exposed as degraded StorageError (244.0069ms)
+✔ approval and memo decisions are journaled and remain idempotent across restart (169.1027ms)
+✔ a changed migration backup refuses later business writes (23.0003ms)
+✔ invalid UTF-8 state is preserved rather than decoded and rewritten (7.5415ms)
+✔ multi-file recovery first detects human edits and leaves all files untouched (142.6037ms)
+✔ boot restores state and marks running tasks interrupted without replaying external actions (138.8312ms)
+✔ bad append-only receipts and usage report skipped rows without blocking a task write (14.2451ms)
+✔ a malformed operations journal fails closed and preserves snapshot and journal bytes (14.8629ms)
+✔ atomic writes use unique temporary names and clean temporary files after success (14.3188ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 18
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1292.6835
