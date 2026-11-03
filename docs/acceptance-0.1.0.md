@@ -99,6 +99,29 @@
 
 > 过程说明（如实记录）：第一次尝试用鼠标点击侧栏「管家」导航时，前台被一个全屏游戏窗口占用，疑似有 2 次点击落在该游戏窗口上（DSH 窗口本身未被点击）；发现后立即停止所有输入自动化，并删除误截的屏幕截图。之后只做"前台校验 + 截图 + 恢复最小化"的只读操作。DSH 会话里可能残留一个由该轮操作打开的 diff 预览浮层，点窗口空白处即可关闭，不影响插件状态。
 
+### 9. 专属会话加载失败修复（2026-11-03 追加，已实测）
+
+**现象**：真实 GUI 里点「和管家说话」/打开工作台时出现
+「专属会话尚未准备好：Cannot find package '@deepseek-ai/dsh-agent' imported from E:\opendots\dsh-butler\lib\index.js；已改为打开管家工作台」。
+
+**根因**：插件以 `link:` 工作区目录安装，`lib/index.js` 里的动态
+`import('@deepseek-ai/dsh-agent')` 从 `E:` 盘目录树解析，看不到 DSH 安装
+（`E:\DSH\resources\app.asar\dsh\node_modules`）自带的包。
+
+**修复**：新增 `src/host/dsh-modules.ts`：
+
+- 先普通解析（插件被复制进 profile 等场景直接命中）；
+- 再按宿主打包布局构造候选安装根（`<exe dir>/resources/app.asar/dsh/node_modules`，以及进程参数里出现的 `app.asar` 安装根 / `...app.asar\dsh` 目录参数），用 `createRequire(...).resolve` 定位后用 `pathToFileURL(...)` 动态加载**安装自带的同一份模块**；
+- 全部失败时错误里带完整「尝试清单 + 各根声明版本」，不再只报一句 Cannot find package。
+
+`src/index.ts` 的专属会话 setup 改为通过它加载 `installModelSelection`（并在成功时记录一行来源日志）。
+
+**验证（真实宿主，无需重启）**：
+
+- 修复前：`POST /dsh-butler/api/workspace/action {"action":"open"}` → `session.state: "failed"`，note 即上面那句 Cannot find package；
+- 修复后：同一请求 → `session.state: "live"`、note 为空；`GET /dsh-butler/api/overview` 的 `session.state` 同为 `live`。说明 `installModelSelection` 已加载、preset 已挂载、专属会话恢复。
+- 新增 `tests/dsh-modules.test.mjs` 5 条（打包布局首选、`app.asar` 参数候选、去重、版本读取、失败清单）；全量测试 **1026/1026 通过**。
+
 ## 三、回滚
 
 1. 编辑 `C:\Users\申俊超\.dsh\profiles\desktop\cordis.patch.yml`，删除 `# >>> dsh-butler-official 0.1.0 begin` 到 `# <<< dsh-butler-official 0.1.0 end` 之间的整段（该段把旧手注入行 `dsh-butler-0.0.22` 置为 `disabled: true`）。
@@ -108,7 +131,7 @@
 
 ## 四、已知限制
 
-1. `@deepseek-ai/dsh-agent` 的动态 import 仍是运行时可选路径（旧实现相同）；解析不到时只影响管家专属会话的模型选择安装步骤。
+1. 专属会话依赖宿主安装的 `@deepseek-ai/dsh-agent`：优先普通解析，其次宿主打包布局（`resources/app.asar/dsh/node_modules`）；两者都找不到时专属会话不可用（错误会列出尝试清单），工作台与其余功能仍可用。
 2. Drawer/Modal 无 portal（无 `react-dom` 依赖），按 `position: fixed` 渲染；挂载点约定位面板根，祖先不能有 `transform/filter/contain`。
 3. 通道接口本轮只做"注册 + 校验 + 列举"：不调用 `send`/`isReady`、不选目标、不读凭据、不接管投递；真实投递仍由宿主组合负责。
 4. 扩展注册不持久化：插件重载/宿主重启后由第三方 `apply` 重新注册；`state/packs.json` 不记录扩展包开关。

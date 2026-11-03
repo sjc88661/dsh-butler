@@ -50,6 +50,7 @@ import { installExecutionContext, type ExecutionContexts } from './host/executio
 import { storageStatus } from './host/store.ts'
 import { installBusinessWorkflows, type BusinessWorkflows } from './host/workflow-runtime.ts'
 import { installButlerExtensions, type ButlerExtensionsHostContext } from './host/extensions.ts'
+import { importDshModule } from './host/dsh-modules.ts'
 import { BUTLER_EXTENSION_SCHEMA_VERSION } from './shared/extension.ts'
 import type { ButlerReminderDelivery } from './host/reminder-delivery.ts'
 import { readMemoryContext } from './host/memory.ts'
@@ -377,7 +378,12 @@ export function apply(ctx: AppContext, config: Config): void {
         setup: async (context, value) => {
           const agent = value as { session: { requestHeader(): { config?: Selection; adapterDefaults?: { reasoningEffort?: boolean } } | undefined } }
           if (!agent?.session) throw new Error('原生 preset setup 缺少 Agent')
-          const { installModelSelection } = await import('@deepseek-ai/dsh-agent')
+          // link: 安装的插件按工作区目录解析模块，普通 import 看不到 DSH 安装
+          // 自带的 node_modules；importDshModule 会退回宿主安装根，并保留完整
+          // 尝试清单，避免专属会话只报一句 Cannot find package。
+          const { installModelSelection } = await importDshModule<typeof import('@deepseek-ai/dsh-agent')>('@deepseek-ai/dsh-agent', {
+            onResolved: where => ctx.logger?.info?.('[dsh-butler] 专属会话模块：%s', where),
+          })
           installModelSelection(context, { get current() {
             const pending = projections.stateOf(agent.session, 'modelSelection')?.pending
             if (pending) return pending

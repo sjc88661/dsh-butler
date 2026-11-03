@@ -10,7 +10,7 @@
 
 - 包自带 `cordis.patch.yml`（`dsh.bundle.patch`）、`locale/zh.json` + `locale/en.json`（`meta.title/description`）、原创 `icon.svg`；`exports` 暴露 `./locale/*.json` 与 `./icon`，插件页因此能看到「管家」的名称、描述与图标。
 - 安装走 `plugin_manager` 的 `install_bundle`；本机以 `link:` 方式链到工作区 `E:\opendots\dsh-butler`。重建 `lib/` 后刷新页面即可加载新的浏览器代码；Host 侧的新 JS 模块代通常需要重启宿主进程，本次验收中通过 bundle 禁用/启用让加载器取用了新模块代（无需重启）。
-- Host 与 Client 两半都由 tsdown 打包：Host bundle 在构建期内联 `@deepseek-ai/schemastery`，因此运行时不依赖 dsh 自带包（工作区 link 的模块解析看不到 profile 的 `node_modules`）。仅 `@deepseek-ai/dsh-agent` 的动态 import 保留为运行时可选路径，与旧实现一致。
+- Host 与 Client 两半都由 tsdown 打包：Host bundle 在构建期内联 `@deepseek-ai/schemastery`，因此运行时不依赖 dsh 自带包（工作区 link 的模块解析看不到 profile 的 `node_modules`）；`@deepseek-ai/dsh-agent` 由新增的 `src/host/dsh-modules.ts` 从宿主安装根解析（普通解析失败时回退 `resources/app.asar/dsh/node_modules`，仍失败则错误带完整尝试清单），专属会话不再因 link 安装而失败。
 - 入口收敛为 4 个（头部入口 / 侧栏行 / 工作台页 / 对话视图）+ 参考范围条 + 右栏页签；头部 4 按钮变 1 主按钮 + 1 菜单；右栏改真 tablist 并记忆视图。
 - 客户端视觉层：`src/client/ui/`（token / 单 `<style>` / 24+ 基础组件 / Tablist / Drawer / Menu / Notice）。颜色只用宿主 `--dsw-alias-*`，品牌墨青只用于图标与选中标记。
 - 工作台：状态条 + 今天/等你决定/资料与技能/系统状态 四区；任务/笔记/待批/记忆/提醒详情改右侧抽屉（焦点陷阱、Esc、焦点还原），不再 `scrollIntoView`。
@@ -25,7 +25,7 @@ node scripts/build.mjs --no-pack
 #   plugin_manager install_bundle  target=E:\opendots\dsh-butler
 ```
 
-验证：`node scripts/build.mjs --typecheck` 通过；`node --test tests/*.test.mjs` **1021/1021** 通过（含 `tests/extensions.test.mjs` 22 组、`tests/visibility.test.mjs`、构建产物可加载性回归）；真实宿主安装后 `GET /dsh-butler/api/overview` 200、旧注入行 inactive；示例 bundle 真实安装→能力包 6→7（`source:'extension'`、内核 boundary）→ 卸载→回到 6，注册表 disposer 已实测；客户端新 UI 的四个席位在 live Slot 树中可见（单行「管家」、头部 `butler` action、`main` key、右栏页签）。完整证据与剩余的用户肉眼确认项见 [`docs/acceptance-0.1.0.md`](docs/acceptance-0.1.0.md)。
+验证：`node scripts/build.mjs --typecheck` 通过；`node --test tests/*.test.mjs` **1026/1026** 通过（含 `tests/extensions.test.mjs` 22 组、`tests/visibility.test.mjs`、`tests/dsh-modules.test.mjs` 5 组、构建产物可加载性回归）；真实宿主安装后 `GET /dsh-butler/api/overview` 200、旧注入行 inactive；示例 bundle 真实安装→能力包 6→7（`source:'extension'`、内核 boundary）→ 卸载→回到 6，注册表 disposer 已实测；客户端新 UI 的四个席位在 live Slot 树中可见（单行「管家」、头部 `butler` action、`main` key、右栏页签）。完整证据与剩余的用户肉眼确认项见 [`docs/acceptance-0.1.0.md`](docs/acceptance-0.1.0.md)。
 
 ## 对外插件接口（能力包 packs / 通道 channels）
 
