@@ -4,22 +4,28 @@
 
 版本 0.0.22+release.1（候选，未部署正式宿主）：在 0.0.21+nature.1 基础上完成发布收口——存储保留/压缩与日志自愈、试用限额层产品化（可选 `trial` 配置、真实请求路径拦截、显式降级）、Windows junction/PDF 守卫修复，以及部署/回滚/灰度方案。候选验收见 [ACCEPTANCE.md](../diagnostics/release-0.0.22-20261027/ACCEPTANCE.md)，真实宿主部署与灰度步骤见 [发布计划](../docs/superpowers/plans/2026-10-27-butler-release-0.0.22-plan.md)。
 
-## 0.1.0 官方插件化（进行中）
+## 0.1.0 官方插件化（已实施，待真实宿主肉眼验收）
 
-0.1.0 起管家以**官方 DSH bundle** 形态分发，不再用手写 `file://` Loader 行注入：
+0.1.0 起管家以**官方 DSH bundle** 形态分发，不再用手写 `file://` Loader 行注入。本版按 7 步完成：官方化 → 设计系统/组件层 → 入口收敛 → 工作台四区 + 详情抽屉 → 三态与可访问性 → 私用体验（轮询降噪/笔记搜索分页/提醒列表）→ 对外插件接口。
 
 - 包自带 `cordis.patch.yml`（`dsh.bundle.patch`）、`locale/zh.json` + `locale/en.json`（`meta.title/description`）、原创 `icon.svg`；`exports` 暴露 `./locale/*.json` 与 `./icon`，插件页因此能看到「管家」的名称、描述与图标。
-- 安装走 `plugin_manager` 的 `install_bundle`；本机以 `link:` 方式链到工作区 `E:\opendots\dsh-butler`。重建 `lib/` 后刷新页面即可加载新的浏览器代码；Host 侧的新 JS 模块代需要重启宿主进程（官方说明：替换已安装包要求重启）。
-- Host 与 Client 两半都由 tsdown 打包：Host bundle 在构建期内联 `@deepseek-ai/schemastery`，因此运行时不依赖 dsh 自带包（工作区 link 的模块解析看不到 profile 的 `node_modules`）。仅 `@deepseek-ai/dsh-agent` 的动态 import 保留为运行时可选路径，与旧实现一致，后续步骤再收敛。
+- 安装走 `plugin_manager` 的 `install_bundle`；本机以 `link:` 方式链到工作区 `E:\opendots\dsh-butler`。重建 `lib/` 后刷新页面即可加载新的浏览器代码；**Host 侧的新 JS 模块代需要重启宿主进程**（官方说明：替换已安装包要求重启）。
+- Host 与 Client 两半都由 tsdown 打包：Host bundle 在构建期内联 `@deepseek-ai/schemastery`，因此运行时不依赖 dsh 自带包（工作区 link 的模块解析看不到 profile 的 `node_modules`）。仅 `@deepseek-ai/dsh-agent` 的动态 import 保留为运行时可选路径，与旧实现一致。
+- 入口收敛为 4 个（头部入口 / 侧栏行 / 工作台页 / 对话视图）+ 参考范围条 + 右栏页签；头部 4 按钮变 1 主按钮 + 1 菜单；右栏改真 tablist 并记忆视图。
+- 客户端视觉层：`src/client/ui/`（token / 单 `<style>` / 24+ 基础组件 / Tablist / Drawer / Menu / Notice）。颜色只用宿主 `--dsw-alias-*`，品牌墨青只用于图标与选中标记。
+- 工作台：状态条 + 今天/等你决定/资料与技能/系统状态 四区；任务/笔记/待批/记忆/提醒详情改右侧抽屉（焦点陷阱、Esc、焦点还原），不再 `scrollIntoView`。
+- 轮询只在界面可见时发请求；笔记列表支持客户端搜索与每页 20 篇「显示更多」；系统状态区列出提醒（计划时间 / 最近投递 / 启用状态分开）。
 - 回滚：profile `cordis.patch.yml` 的 `dsh-butler-official 0.1.0` 段停用了旧手注入行 `dsh-butler-0.0.22`；删除该段并移除 bundle 即可回到 0.0.22 形态。
 
 ```powershell
 # 构建（只编译打包，不生成 tgz）
 $env:DSH_PROFILE_DIR = 'C:\Users\申俊超\.dsh\profiles\desktop'
 node scripts/build.mjs --no-pack
-# 安装（首次）/ 重新加载（禁用再启用 bundle，或重启宿主）
+# 安装（首次）/ 重新加载（重启宿主；或禁用再启用 bundle）
 #   plugin_manager install_bundle  target=E:\opendots\dsh-butler
 ```
+
+验证：`node scripts/build.mjs --typecheck` 通过；`node --test tests/*.test.mjs` **1017/1017** 通过（新增 `tests/extensions.test.mjs` 22 组）；真实宿主安装后 `GET /dsh-butler/api/overview` 200、旧注入行 inactive。重启宿主后还需复验 `butlerExtensions` 服务与示例 bundle 的安装/卸载。
 
 ## 对外插件接口（能力包 packs / 通道 channels）
 
