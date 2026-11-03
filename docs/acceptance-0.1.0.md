@@ -52,18 +52,27 @@
 
 - Loader：`include:dsh-butler` 存在，`packageDir` 指向 profile 的 `link:` → `E:\opendots\dsh-butler`；Config schema 正常投影。
 - 旧手注入行 `dsh-butler-0.0.22`：`inactive`（回滚路径保留）。
-- `GET http://127.0.0.1:53210/dsh-butler/api/overview`：200，`reminders=6`，`remindersAvailable=true`，vault 正常。
+- `GET http://127.0.0.1:53210/dsh-butler/api/overview`：200，`reminders=6`，`remindersAvailable=true`，`packs=6`（扩展包还没有，符合预期），vault 正常。
 - 插件页元数据：`exports` 的 `./locale/*.json`、`./icon` 均可解析（`createRequire` 从 profile 解析验证）。
+- 客户端 UI 注册：对 `lib/client.js` 做无浏览器冒烟（见 §3），5 个席位会注册；右栏页签依赖宿主 `sidebarRightTabs`，由真实宿主提供。
+
+### 7. 示例 bundle 已"预装"（重启后激活）
+
+`plugin_manager install_bundle target=E:\opendots\dsh-butler\examples\butler-pack-example`：
+
+- 结果 `application: applied`，无 warning；`packageResult.exitCode=0`。
+- profile `package.json`：`"@dsh-external/butler-pack-example": "link:E:/opendots/dsh-butler/examples/butler-pack-example"`，且列入 `dsh.profile.bundles`。
+- profile `node_modules`：junction 指向示例目录，`locale/zh.json` 可读。
+- Config 目录：`include:butler-pack-example` 存在，`packageDir` 指向 junction；`status: absent` 表示它的插件入口尚未激活 —— **这是预期**：示例声明了 `inject: ['butlerExtensions']`，而运行中的宿主仍是旧 Host 模块代、还没有该服务。重启后 butler 行先插入并发布服务，示例行随后激活。
 
 ## 二、待验收（需要重启 DSH 桌面应用）
 
-Host 侧新代码（`butlerExtensions` 服务、扩展包并入读模型）需要新的 JS 模块代；运行中的宿主里尚不存在该服务。重启后按顺序验收：
+Host 侧新代码（`butlerExtensions` 服务、扩展包并入读模型）需要新的 JS 模块代；运行中的宿主里尚不存在该服务（试过禁用/启用 bundle：Cordis 复用已缓存的模块代，不会加载新代码）。重启后按顺序验收：
 
 1. `cordis_inspect_query` Host Service：`butlerExtensions` 出现，`schemaVersion: 1`。
-2. 安装示例 bundle：`plugin_manager install_bundle target=E:\opendots\dsh-butler\examples\butler-pack-example`；确认插件行激活。
-3. `GET /dsh-butler/api/overview` 的能力包列表出现 `example-weekly-review`（`source: 'extension'`，`enabled: true`，内核 `boundary`）。
-4. 卸载示例 bundle（`remove_bundle`），确认能力包列表恢复、无残留。
-5. GUI 肉眼验收：会话头部「管家 + ⋯」、侧栏单行「管家」→ 工作台页、工作台状态条与四区、任务/笔记/待批/提醒抽屉（Esc 关闭与焦点还原）、右栏真 tablist（方向键切换、记忆视图）、设置→插件「管家」条目（铃铛图标 + 描述）。
+2. `include:butler-pack-example` 从 `absent` 变为已激活；`GET /dsh-butler/api/overview` 的能力包列表出现 `example-weekly-review`（`source: 'extension'`、`enabled: true`、内核 `boundary`）。
+3. 卸载示例 bundle：`plugin_manager remove_bundle target=@dsh-external/butler-pack-example`；确认能力包列表恢复 6 个、无残留。
+4. GUI 肉眼验收：会话头部「管家 + ⋯」、侧栏单行「管家」→ 工作台页、工作台状态条与四区、任务/笔记/待批/提醒抽屉（Esc 关闭与焦点还原）、右栏真 tablist（方向键切换、记忆视图）、设置→插件「管家」条目（铃铛图标 + 描述）。
 
 ## 三、回滚
 
