@@ -30,9 +30,20 @@ function nodes(tree) {
   // HistorySection displays this real preview until the user opens its browser.
   return tree && typeof tree === 'object' ? [tree, ...nodes(tree.children), ...nodes(tree.props?.preview)] : []
 }
-const text = tree => nodes(tree).flatMap(node => (node.children ?? []).filter(child => typeof child === 'string')).join('\n')
+// Component elements are not rendered by this host-element harness, so a
+// component's user-facing text arrives through its props (e.g. InlineError
+// `message`, ErrorState `title`). Host elements keep text as string children.
+const text = tree => nodes(tree).flatMap(node => [
+  ...(node.children ?? []).filter(child => typeof child === 'string'),
+  ...['message', 'title', 'description'].map(key => node.props?.[key]).filter(value => typeof value === 'string'),
+]).join('\n')
 const button = (tree, label) => nodes(tree).find(node => node.type === 'button' && node.children.includes(label))
 const taskPane = tree => nodes(tree).find(node => node.props?.['data-butler-task-detail'])
+// The design system's overlays are components; the harness finds them by their
+// declared function name, exactly like the native planner finds host elements.
+const componentName = node => typeof node.type === 'function' ? node.type.name : undefined
+const drawer = tree => nodes(tree).find(node => componentName(node) === 'Drawer')
+const isAlert = node => node.props?.role === 'alert' || componentName(node) === 'InlineError' || componentName(node) === 'ErrorState'
 
 /** Run the real panel, API and effects with deferred read responses and commit refs before effects. */
 function carrier({ ctx = {}, clipboard } = {}) {
@@ -185,7 +196,7 @@ test('native file errors remain inside the selected detail and never borrow the 
     await e.openTask(detail(task, [{ path: file }]))
     const open = button(taskPane(e.tree), '用DSH打开文件'); assert.ok(open); open.props.onClick(); await e.flush()
     assert.equal(opened.length, 0, failure)
-    assert.ok(nodes(taskPane(e.tree)).some(node => node.props?.role === 'alert'), failure + ' must surface in this task')
+    assert.ok(nodes(taskPane(e.tree)).some(isAlert), failure + ' must surface in this task')
     assert.ok(text(taskPane(e.tree)).includes(file))
     if (failure === 'throwing-service') assert.match(text(taskPane(e.tree)), /native viewer refused/)
     if (failure === 'strict-context') assert.match(text(taskPane(e.tree)), /strict property denied/)
@@ -218,7 +229,7 @@ test('unavailable or rejected clipboard keeps the exact manual command and a use
     assert.match(text(taskPane(e.tree)), /手动复制/)
     assert.equal(nodes(taskPane(e.tree)).find(node => node.props?.['aria-label'] === '任务接续指令').props.value, `继续任务 ${tasks[0].id}`)
     if (clipboard) assert.match(text(taskPane(e.tree)), /clipboard blocked/)
-    assert.ok(nodes(taskPane(e.tree)).some(node => node.props?.role === 'alert'))
+    assert.ok(nodes(taskPane(e.tree)).some(isAlert))
     e.unmount()
   }
 })
@@ -236,7 +247,7 @@ test('continuation and source navigation validate single-line bounded identifier
     const opened = [], view = carrier({ ctx: { uiWorkspace: { openSession: id => opened.push(id) } } })
     await view.mount(); await view.openTask(detail({ ...tasks[0], sessionId }))
     const open = button(taskPane(view.tree), '打开来源会话'); assert.ok(open); open.props.onClick(); await view.flush()
-    assert.deepEqual(opened, []); assert.ok(nodes(taskPane(view.tree)).some(node => node.props?.role === 'alert')); view.unmount()
+    assert.deepEqual(opened, []); assert.ok(nodes(taskPane(view.tree)).some(isAlert)); view.unmount()
   }
 })
 
@@ -244,7 +255,7 @@ test('source navigation surfaces optional-service absence and native exceptions'
   for (const ctx of [{}, { get: () => ({ openSession() { throw new Error('source denied') } }) }]) {
     const e = carrier({ ctx }); await e.mount(); await e.openTask()
     const open = button(taskPane(e.tree), '打开来源会话'); assert.ok(open); open.props.onClick(); await e.flush()
-    assert.ok(nodes(taskPane(e.tree)).some(node => node.props?.role === 'alert'))
+    assert.ok(nodes(taskPane(e.tree)).some(isAlert))
     assert.match(text(taskPane(e.tree)), /uiWorkspace\.openSession|source denied/); e.unmount()
   }
 })
@@ -272,54 +283,67 @@ test('an old async copy result cannot replace feedback after the user selects an
   assert.doesNotMatch(text(taskPane(e.tree)), /已复制/); assert.ok(text(taskPane(e.tree)).includes(tasks[1].id)); e.unmount()
 })
 
-test('a delayed task detail scrolls its visible pane once after success, and dashboard polls do not steal the scroll position', async () => {
+test('a delayed task detail opens its drawer when settled and dashboard polls never reset the open drawer', async () => {
   const e = carrier(); await e.mount(); const request = await e.selectTask()
-  assert.equal(e.scrolls.length, 0, 'Selection alone must not scroll an empty/loading task anchor')
+  const loading = drawer(e.tree); assert.ok(loading, 'Selection opens the detail drawer before the read settles')
+  assert.equal(loading.props.open, true); assert.equal(loading.props.title, '任务详情')
+  assert.equal(e.scrolls.length, 0, 'Opening a detail drawer must not scroll the page')
   e.reply(request, detail()); await e.flush()
-  assert.equal(e.scrolls.length, 1); assert.ok(taskPane(e.scrolls[0].tree)); assert.equal(e.scrolls[0].options.block, 'start')
+  assert.ok(taskPane(e.tree)); assert.equal(drawer(e.tree).props.title, tasks[0].title)
   await e.poll(); e.reply(e.latest(/\/task\?id=/), detail()); await e.flush()
-  assert.equal(e.scrolls.length, 1, 'A poll of the same task must not scroll again')
+  assert.ok(taskPane(e.tree), 'A poll of the same task must keep the open drawer content')
+  assert.equal(drawer(e.tree).props.open, true); assert.equal(e.scrolls.length, 0)
   button(taskPane(e.tree), '关闭任务详情').props.onClick(); await e.flush()
-  await e.openTask(); assert.equal(e.scrolls.length, 2, 'Closing resets the selection so a later explicit reopen can scroll'); e.unmount()
+  assert.equal(drawer(e.tree), undefined, 'Closing the detail resets the selection')
+  await e.openTask(); assert.ok(drawer(e.tree), 'A later explicit open mounts the drawer again')
+  assert.equal(e.scrolls.length, 0); e.unmount()
 })
 
-test('a task read error settles visibly, scrolls once and remains closeable', async () => {
+test('a task read error settles visibly in the drawer and stays closeable', async () => {
   const e = carrier(); await e.mount(); const request = await e.selectTask()
-  assert.equal(e.scrolls.length, 0); request.reject(new Error('selected task unavailable')); await e.flush()
-  assert.equal(e.scrolls.length, 1); assert.match(text(e.scrolls[0].tree), /selected task unavailable/)
-  const close = button(e.tree, '关闭任务详情'); assert.ok(close, 'A failed selected task must still be closeable'); close.props.onClick(); await e.flush()
-  assert.doesNotMatch(text(e.tree), /selected task unavailable/); e.unmount()
+  assert.ok(drawer(e.tree), 'The drawer stays mounted while the read is pending')
+  request.reject(new Error('selected task unavailable')); await e.flush()
+  assert.equal(e.scrolls.length, 0)
+  const failed = drawer(e.tree); assert.ok(failed)
+  assert.equal(failed.props.title, '任务详情')
+  assert.match(JSON.stringify(failed), /selected task unavailable/)
+  assert.ok(nodes(failed).some(isAlert), 'A failed read must be announced')
+  failed.props.onClose(); await e.flush()
+  assert.equal(drawer(e.tree), undefined); assert.doesNotMatch(text(e.tree), /selected task unavailable/); e.unmount()
 })
 
-test('aborted task requests cannot scroll or replace a later selection or a closed pane', async () => {
+test('aborted task requests cannot replace a later selection or a closed drawer', async () => {
   const e = carrier(); await e.mount(); const first = await e.selectTask(), second = await e.selectTask(1)
   assert.equal(first.signal.aborted, true); e.reply(second, detail(tasks[1])); await e.flush()
-  const count = e.scrolls.length; e.reply(first, detail()); await e.flush()
-  assert.equal(e.scrolls.length, count); assert.ok(text(taskPane(e.tree)).includes(tasks[1].id))
+  e.reply(first, detail()); await e.flush()
+  assert.ok(text(taskPane(e.tree)).includes(tasks[1].id))
   await e.poll(); const late = e.latest(/\/task\?id=/)
   button(taskPane(e.tree), '关闭任务详情').props.onClick(); await e.flush(); assert.equal(late.signal.aborted, true)
-  e.reply(late, detail(tasks[1])); await e.flush(); assert.equal(e.scrolls.length, count); assert.equal(taskPane(e.tree), undefined); e.unmount()
+  e.reply(late, detail(tasks[1])); await e.flush(); assert.equal(drawer(e.tree), undefined); assert.equal(taskPane(e.tree), undefined); e.unmount()
 })
 
-test('a delayed note scrolls its actual visible pane once, preserves manual note access and ignores same-note polling', async () => {
+test('a delayed note opens its drawer, keeps it across same-note polling and reopens after close', async () => {
   const e = carrier(); await e.mount(); const request = await e.selectNote('alpha')
+  assert.ok(drawer(e.tree), 'Selecting a note opens its drawer before the read settles')
   assert.equal(e.scrolls.length, 0); e.reply(request, note('alpha')); await e.flush()
-  assert.equal(e.scrolls.length, 1, 'A note selected above the fold needs a post-load scroll')
-  assert.match(text(e.scrolls[0].tree), /Body alpha/)
-  await e.poll(); e.reply(e.latest(/\/note\?slug=/), note('alpha')); await e.flush(); assert.equal(e.scrolls.length, 1)
+  assert.match(text(e.tree), /Body alpha/); assert.equal(e.scrolls.length, 0)
+  await e.poll(); e.reply(e.latest(/\/note\?slug=/), note('alpha')); await e.flush()
+  assert.match(text(e.tree), /Body alpha/, 'A poll keeps the open note drawer')
   button(e.tree, '关闭').props.onClick(); await e.flush(); assert.doesNotMatch(text(e.tree), /Body alpha/)
-  const again = await e.selectNote('alpha'); e.reply(again, note('alpha')); await e.flush(); assert.equal(e.scrolls.length, 2); e.unmount()
+  const again = await e.selectNote('alpha'); e.reply(again, note('alpha')); await e.flush()
+  assert.match(text(e.tree), /Body alpha/); e.unmount()
 })
 
-test('a selected note error gets a visible closeable anchor and aborted old note reads never scroll or replace it', async () => {
+test('a selected note error stays visible and closeable while aborted old note reads cannot replace it', async () => {
   const e = carrier(); await e.mount(); const alpha = await e.selectNote('alpha'), beta = await e.selectNote('beta')
   assert.equal(alpha.signal.aborted, true); beta.reject(new Error('beta failed')); await e.flush()
-  assert.equal(e.scrolls.length, 1); assert.match(text(e.scrolls[0].tree), /beta failed/)
-  e.reply(alpha, note('alpha')); await e.flush(); assert.doesNotMatch(text(e.tree), /Body alpha/); assert.equal(e.scrolls.length, 1)
+  assert.equal(e.scrolls.length, 0); assert.match(text(e.tree), /beta failed/)
+  assert.ok(nodes(drawer(e.tree)).some(isAlert))
+  e.reply(alpha, note('alpha')); await e.flush(); assert.doesNotMatch(text(e.tree), /Body alpha/)
   const close = button(e.tree, '关闭'); assert.ok(close); close.props.onClick(); await e.flush()
   const loading = await e.selectNote('alpha'), closeLoading = button(e.tree, '关闭'); assert.ok(closeLoading); closeLoading.props.onClick(); await e.flush()
   assert.equal(loading.signal.aborted, true); e.reply(loading, note('alpha')); await e.flush()
-  assert.equal(e.scrolls.length, 1); assert.doesNotMatch(text(e.tree), /Body alpha|beta failed/); e.unmount()
+  assert.doesNotMatch(text(e.tree), /Body alpha|beta failed/); e.unmount()
 })
 
 test('a global workbench file click navigates to its exact source, waits for the native header commit and opens once', async () => {
@@ -371,7 +395,7 @@ test('a native failure after handoff appears in its source header and when the o
   button(taskPane(e.tree), '用DSH打开文件').props.onClick(); await e.flush()
   assert.deepEqual(surface.navigated, [tasks[0].sessionId]); e.unmount(); surface.show(tasks[0].sessionId)
   await e.mountHeader(surface.commit); assert.match(text(e.tree), /native viewer refused after mount/)
-  assert.ok(text(e.tree).includes(file)); assert.ok(nodes(e.tree).some(node => node.props?.role === 'alert'))
+  assert.ok(text(e.tree).includes(file)); assert.ok(nodes(e.tree).some(isAlert))
   e.unmount(); surface.show(undefined); await e.mount(); await e.openTask(detail(tasks[1], [{ path: 'E:/unrelated.bib' }]))
   assert.doesNotMatch(text(taskPane(e.tree)), /native viewer refused after mount/)
   await e.openTask(detail(tasks[0], [{ path: file }]))

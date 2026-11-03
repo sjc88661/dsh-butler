@@ -1,6 +1,6 @@
 import { createElement as h, useEffect, useRef, useState } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
-import { clientService, openButlerConversation, type NavOutcome } from './navigate.ts'
+import { clientService } from './navigate.ts'
 import { ButlerWorkbench } from './panel.ts'
 import { openTaskFile, useTaskFileHandoff } from './workbench-actions.ts'
 import { ButlerSources } from './workspace-sources.ts'
@@ -9,7 +9,6 @@ import { ButlerDailyTrial } from './daily-trial.ts'
 import { decideOrganization, fetchOrganizations, fetchSources, fetchWorkspace, selectSources, workspaceAction, type SourceRef, type WorkspaceSnapshot } from './workspace-api.ts'
 import { clearWorkspaceDraft, consumeWorkspacePaneHandoff, consumeWorkspacePaneRequest, copyWorkspaceText, handoffSourceToWorkspace, insertWorkspaceDraft, openWorkspaceConversation, openWorkspaceSidebar, prepareWorkspaceDraft, refreshWorkspaceUi, workspaceDraft, workspacePaneRequest, type WorkspaceInputActions } from './workspace-actions.ts'
 import { uiButton, uiCard, uiError, uiInput, uiMuted, uiRow, uiStatus, useWorkspaceOperation, useWorkspaceRead, useWorkspaceRevision } from './workspace-components.ts'
-import { ButlerBellGlyph } from './icon.ts'
 import { ButlerStyles, Button, EmptyState, Tablist, TextArea } from './ui/index.ts'
 import { shortTime, STATUS_LABEL, T } from './view.ts'
 
@@ -166,33 +165,13 @@ export function ButlerRightPane(props: WorkspaceSlotProps): unknown {
 /**
  * `main` 页：管家工作台本身。
  *
- * 0.1.0 前这里是一块"跳板"：挂载即调用 openWorkspaceConversation，把页面
- * 换成某个管家会话；现在入口收敛为「侧栏行 = 工作台页」，跳转只在用户明确
- * 点「和管家说话」时发生，失败也留在页面上说明原因，不再静默换屏。
+ * 页壳只负责一层全高容器：标题、状态 chips、「刷新 / 和管家说话」都由工作台
+ * 自己的状态条提供，避免同一页出现两份标题和两个主按钮（第 4 步遗留的重复页头）。
+ * 0.1.0 前这里是一块"跳板"：挂载即调用 openWorkspaceConversation 把页面换成
+ * 某个管家会话；现在跳转只由用户点「和管家说话」触发。
  */
 export function ButlerWorkspacePage(props: { ctx?: Context }): unknown {
-  const ctx = props.ctx as Context
-  const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState<string | undefined>(undefined)
-  const [failed, setFailed] = useState(false)
-  const openChat = (): void => {
-    if (busy) return
-    setBusy(true)
-    void openButlerConversation(ctx).then((outcome: NavOutcome) => {
-      setMessage(outcome.ok ? '已打开管家对话。' : outcome.reason)
-      setFailed(!outcome.ok)
-    }).finally(() => setBusy(false))
-  }
-  return h('div', { className: 'butler-page' },
-    h(ButlerStyles),
-    h('header', { className: 'butler-surface__head' },
-      h('h2', { className: 'butler-surface__title' }, '管家工作台'),
-      h('span', { className: 'butler-surface__sub' }, '今天、等你决定、资料与历史'),
-      h('span', { className: 'butler-surface__spacer' }),
-      h(Button, { variant: 'primary', size: 'sm', icon: h(ButlerBellGlyph, { size: 14 }), busy, onClick: openChat }, '和管家说话')),
-    message === undefined ? null : h('div', { className: 'butler-surface__head' },
-      h('span', { role: failed ? 'alert' : 'status', className: 'butler-surface__sub' }, message)),
-    h('div', { className: 'butler-surface__body' }, h(ButlerWorkbench, { ctx })))
+  return h('div', { className: 'butler-page' }, h(ButlerWorkbench, { ctx: props.ctx }))
 }
 
 /** Source references and prepared text live above the native input, never in a second composer. */

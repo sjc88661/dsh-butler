@@ -1,6 +1,22 @@
+/**
+ * History paging browser and its lightweight first-screen preview.
+ *
+ * The browser owns one immutable projection revision and its own page offset;
+ * dashboard polling never resets either, and a failed page keeps the last
+ * successful snapshot on screen. Styling is the design system's: the paging
+ * controls are host `<button>` elements carrying `butler-btn` classes (the
+ * panel harness addresses them by accessible name), and failures use the
+ * shared `InlineError` component instead of a one-off red line.
+ *
+ * @module @dsh-external/dsh-butler/client
+ */
 import { createElement as h, useEffect, useState } from 'react'
 import { fetchHistory, type HistoryKind, type HistoryPage } from './api.ts'
-import { buttonStyle, emptyLine, T } from './view.ts'
+import { InlineError, LoadingBlock } from './ui/index.ts'
+import { BUTLER_SPACE } from './ui/index.ts'
+
+/** Shared compact control classes. */
+const controlClass = 'butler-btn butler-btn--secondary butler-btn--sm'
 
 interface HistoryProps<K extends HistoryKind> {
   kind: K
@@ -33,20 +49,26 @@ export function HistoryBrowser<K extends HistoryKind>({ kind, taskId, limit = 10
     setPage(null); setLoading(true)
     setRequest(previous => ({ offset: 0, refresh: previous.refresh + 1 }))
   }
-  return h('div', { 'data-butler-history': `${kind}:${taskId ?? ''}` },
-    h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', padding: '5px 0' } },
-      h('button', { type: 'button', style: buttonStyle, disabled: loading || !!problem || !visible || visible.offset === 0, onClick: () => move(Math.max(0, visible!.offset - visible!.limit)) }, '上一页'),
-      h('button', { type: 'button', style: buttonStyle, disabled: loading || !!problem || visible?.nextOffset === undefined, onClick: () => move(visible!.nextOffset!) }, '下一页'),
-      h('button', { type: 'button', style: buttonStyle, disabled: loading, onClick: refresh }, '刷新历史'),
-      emptyLine(visible ? `${visible.total ? visible.offset + 1 : 0}–${visible.offset + visible.items.length} / ${visible.total} 项` : '尚未读取')),
-    loading ? emptyLine('正在读取历史…') : null,
-    problem ? h('div', { role: 'alert', style: { color: T.warn, fontSize: '12px', wordBreak: 'break-word' } }, `${problem}；已显示的内容保留为上次快照，请刷新历史。`) : null,
+  return h('div', { 'data-butler-history': `${kind}:${taskId ?? ''}`, style: { display: 'flex', flexDirection: 'column', gap: BUTLER_SPACE.xs, minWidth: '0' } },
+    h('div', { className: 'butler-row', style: { padding: '5px 0' } },
+      h('button', { type: 'button', className: controlClass, disabled: loading || !!problem || !visible || visible.offset === 0, onClick: () => move(Math.max(0, visible!.offset - visible!.limit)) }, '上一页'),
+      h('button', { type: 'button', className: controlClass, disabled: loading || !!problem || visible?.nextOffset === undefined, onClick: () => move(visible!.nextOffset!) }, '下一页'),
+      h('button', { type: 'button', className: controlClass, disabled: loading, onClick: refresh }, '刷新历史'),
+      h('span', { className: 'butler-muted' }, visible ? `${visible.total ? visible.offset + 1 : 0}–${visible.offset + visible.items.length} / ${visible.total} 项` : '尚未读取')),
+    loading ? h(LoadingBlock, { label: '正在读取历史…', lines: 2 }) : null,
+    problem === null ? null : h(InlineError, {
+      message: `${problem}；已显示的内容保留为上次快照，请刷新历史。`,
+      retry: refresh,
+      retryLabel: '重试',
+    }),
     visible ? h('div', { key: `${visible.revision}:${visible.offset}` }, renderPage(visible)) : null)
 }
 
 /** Keep the cheap first-screen preview until the owner explicitly browses its history. */
 export function HistorySection<K extends HistoryKind>(props: HistoryProps<K> & { preview: unknown }): unknown {
   const [browsing, setBrowsing] = useState(false)
-  return browsing ? h(HistoryBrowser<K>, { ...props, key: `${props.kind}:${props.taskId ?? ''}` }) : h('div', {}, props.preview,
-    h('button', { type: 'button', style: buttonStyle, onClick: () => setBrowsing(true) }, '浏览完整历史'))
+  return browsing
+    ? h(HistoryBrowser<K>, { ...props, key: `${props.kind}:${props.taskId ?? ''}` })
+    : h('div', { style: { display: 'flex', flexDirection: 'column', gap: BUTLER_SPACE.xs, minWidth: '0' } }, props.preview,
+      h('button', { type: 'button', className: controlClass, onClick: () => setBrowsing(true) }, '浏览完整历史'))
 }

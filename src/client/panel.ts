@@ -3,139 +3,56 @@
  * keyed `main` seat, mirroring how the shipped Plugins/Schedule pages and the
  * task board occupy that seat.
  *
+ * ## Information architecture
+ * The page is one status bar plus four fixed zones, in this order:
+ *
+ * 1. `今天` - open work (today's to-dos and running tasks);
+ * 2. `等你决定` - uncertain hand-offs, interrupted tasks, pending approvals and
+ *    proposed memories; interrupted work is a real row here, not a number in a
+ *    footer paragraph;
+ * 3. `资料与技能` - notes, capability packs and the document Space, collapsed by
+ *    default because they are reference material;
+ * 4. `系统状态` - budgets, storage, usage and history, collapsed by default.
+ *
+ * Task and note details no longer render after the zone grid and call
+ * `scrollIntoView`: each opens a right-hand {@link Drawer} mounted at this page
+ * root. The drawer supplies the focus trap, Escape handling and focus
+ * restoration to the triggering row; the page therefore never changes DOM
+ * order for a detail and never steals the page scroll position.
+ *
+ * ## Async semantics kept
+ * * Selecting a task still opens a read (`/task?id=`), and the settled detail is
+ *   tied to the exact selected id: a late/aborted response for another task is
+ *   ignored (`settledTaskId` / `settledSlug`).
+ * * Dashboard polling still re-reads the selected task/note in the background
+ *   without clearing the open drawer or resetting the open history page.
+ * * A task action's outcome is still scoped to the task it was started for
+ *   (`taskVisit`), so a slow clipboard/native result cannot land on another
+ *   task after the owner selects a different one.
+ *
  * @module @dsh-external/dsh-butler/client
  */
 import { createElement as h, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   fetchNote, fetchOverview, fetchTask,
-  type ButlerSession, type HistoryPage, type NoteEntry, type NoteResult, type Overview, type PackEntry, type Receipt, type Task, type TaskDetail, type UsageTotals,
+  type Memo, type NoteEntry, type NoteResult, type Overview, type PendingItem, type TaskDetail,
 } from './api.ts'
 import { PANEL_ID } from './ids.ts'
-import { T, STATUS_LABEL, STATUS_COLOR, shortTime, shortDuration, shortNumber, emptyLine, section, buttonStyle } from './view.ts'
+import { shortTime } from './view.ts'
 import { openButlerConversation, rememberReadySession } from './navigate.ts'
-import { budgetViews, runtimeView, usageView, usageBreakdownView, usageCostBreakdownView, taskMetricsView, reminderView } from './workbench-model.ts'
-import { budgetRow, runtimeContent, memoryContent, taskDetailPane } from './workbench-details.ts'
+import { runtimeView } from './workbench-model.ts'
+import { taskDetailPane } from './workbench-details.ts'
 import { continueTaskWithButler, copyTaskContinuation, openTaskFile, openTaskSourceConversation, subscribeTaskFiles, taskFileSnapshot, type TaskActionOutcome } from './workbench-actions.ts'
-import { HistorySection } from './history.ts'
-import { packRow } from './packs.ts'
+import {
+  BUTLER_COLORS, BUTLER_SPACE,
+  ButlerStyles, Drawer, ErrorState, InlineError, KeyValue, LoadingBlock,
+} from './ui/index.ts'
+import { decisionsZone, receiptRow, resourcesZone, systemZone, todayZone } from './workbench/zones.ts'
+import { workbenchStatusBar } from './workbench/status-bar.ts'
 
 /** Poll cadence while the seat is mounted. */
 const POLL_MS = 15000
-
-/**
- * Turn the host's price basis into something a reader can check.
- *
- * The host stores `official-<effective-date>/<row>/<period>` on every priced
- * row, so the panel can name the table and the column instead of printing a
- * number with no provenance.
- * @param basis - the stored basis, e.g. `official-2026-09-10/flash/offPeak`.
- * @returns a human label.
- */
-function basisLabel(basis: string): string {
-  if (!/^official-\d{4}-\d{2}-\d{2}\/(flash|pro)\/(peak|offPeak)$/.test(basis)) return basis === 'unknown' ? '未记录' : `已存依据 ${basis}`
-  const [table = '', row = '', period = ''] = basis.split('/')
-  const date = table.replace('official-', '')
-  const column = period === 'peak' ? '高峰时段' : period === 'offPeak' ? '非高峰时段' : period
-  return `官方价目表 ${date} 版，${row || '未知档'}·${column || '未知时段'}`
-}
-
-/**
- * One open task row: state dot, title, due date and evidence count.
- * @param task - the ledger task.
- * @returns the row element.
- */
-function taskRow(task: Task, openTask: (id: string) => void, selected: boolean, operations: NonNullable<Overview['runtimeControls']>['reminderOperations'] = []): unknown {
-  const evidence = task.evidence?.length ?? 0
-  const reminder = task.kind === 'reminder' || task.reminder !== undefined
-  const delivery = reminder ? reminderView({ link: task.reminder, history: { available: false, deliveryState: 'unknown' },
-    outbound: operations.filter(row => row.taskId === task.id && row.action === 'create').flatMap(row => row.outbound ?? []) }) : undefined
-  const note = reminder ? `${task.reminder?.creationState === 'uncertain' ? '提醒创建待核对'
-    : task.reminder?.deliveryState === 'delivered' || task.reminder?.deliveryState === 'assistant-completed' ? '调度已入提醒会话' : '提醒调度记录'}；${delivery!.completion}；${delivery!.external}；回执见详情` : task.note
-  return h('button', {
-    key: task.id, type: 'button', onClick: () => openTask(task.id), 'aria-label': `查看任务：${task.title}`,
-    style: {
-      display: 'flex', gap: '8px', alignItems: 'flex-start',
-      padding: '6px 4px', width: '100%', textAlign: 'left', cursor: 'pointer', border: '0', borderTop: `1px solid ${T.border}`,
-      background: selected ? T.bg2 : 'transparent',
-    },
-  },
-  h('span', {
-    title: STATUS_LABEL[task.status],
-    style: {
-      flex: '0 0 auto', marginTop: '5px', width: '7px', height: '7px',
-      borderRadius: '50%', background: STATUS_COLOR[task.status],
-    },
-  }),
-  h('div', { style: { minWidth: '0', flex: '1 1 auto' } },
-    h('div', { style: { fontSize: '13px', color: T.text, wordBreak: 'break-word' } }, task.title),
-    h('div', { style: { fontSize: '11px', color: T.dim, marginTop: '2px' } },
-      [
-        `${reminder ? '账本' : ''}${STATUS_LABEL[task.status]}`,
-        task.dueAt === undefined ? '' : ` · 到期 ${shortTime(task.dueAt)}`,
-        evidence === 0 ? '' : ` · 证据 ${evidence}`,
-        note === undefined || note === '' ? '' : ` · ${note}`,
-      ].filter((part) => part !== '').join('')),
-    h('div', { style: { fontSize: '11px', color: T.dim, marginTop: '2px' } }, taskMetricsView(task))))
-}
-
-/**
- * One activity receipt row.
- * @param receipt - the recorded tool call.
- * @returns the row element.
- */
-function receiptRow(receipt: Receipt, index = 0): unknown {
-  return h('div', {
-    key: `${receipt.callId ?? receipt.tool}:${receipt.at}:${index}`,
-    style: {
-      display: 'flex', gap: '8px', alignItems: 'baseline',
-      padding: '5px 0', borderTop: `1px solid ${T.border}`, fontSize: '12px',
-    },
-  },
-  h('span', {
-    style: { flex: '0 0 auto', color: receipt.ok ? T.ok : T.err, fontFamily: 'ui-monospace, monospace' },
-  }, receipt.ok ? '✓' : '✗'),
-  h('div', { style: { minWidth: '0', flex: '1 1 auto' } },
-    h('div', { style: { color: T.text, wordBreak: 'break-all' } },
-      `${receipt.tool}${receipt.summary === undefined ? '' : ` · ${receipt.summary}`}`),
-    h('div', { style: { color: T.dim, fontSize: '11px' } },
-      `${shortTime(receipt.at)} · ${shortDuration(receipt.ms)}`),
-    receipt.callId ? h('div', { style: { color: T.dim, fontSize: '11px', wordBreak: 'break-all' } }, `调用 ${receipt.callId} · 执行 ${receipt.runId ?? '未知'}`) : null,
-    receipt.error === undefined
-      ? null
-      : h('div', { style: { color: T.err, fontSize: '11px', wordBreak: 'break-word' } }, receipt.error)))
-}
-
-/**
- * A clickable note row.
- * @param entry - the note file entry.
- * @param onOpen - selection callback.
- * @param selected - whether it is the open note.
- * @returns the row element.
- */
-function noteRow(entry: { path: string; size: number; modified: string }, onOpen: (slug: string) => void, selected: boolean): unknown {
-  const slug = entry.path.replace(/^notes\//, '').replace(/\.md$/, '')
-  return h('button', {
-    key: entry.path, type: 'button', 'aria-label': `查看笔记：${slug}`,
-    onClick: () => { onOpen(slug) },
-    style: {
-      padding: '5px 6px', borderTop: `1px solid ${T.border}`, cursor: 'pointer',
-      background: selected ? T.bg2 : 'transparent', borderRadius: '4px',
-      border: '0', width: '100%', textAlign: 'left',
-    },
-  },
-  h('div', { style: { fontSize: '12px', color: T.text, wordBreak: 'break-all' } }, slug),
-  h('div', { style: { fontSize: '11px', color: T.dim } },
-    `${entry.size}B · ${shortTime(entry.modified)}`))
-}
-
-/** Human-readable Chinese label for the butler session's last state. */
-const SESSION_LABEL: Record<ButlerSession['state'], string> = {
-  live: '已在',
-  created: '新建',
-  resumed: '已恢复',
-  failed: '建不起来',
-}
 
 /**
  * The full workbench page.
@@ -156,11 +73,12 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
   const [taskOutcome, setTaskOutcome] = useState<{ taskId: string; outcome: TaskActionOutcome } | null>(null)
   const [settledTaskId, setSettledTaskId] = useState<string | null>(null)
   const [settledSlug, setSettledSlug] = useState<string | null>(null)
+  const [openMemo, setOpenMemo] = useState<Memo | null>(null)
+  const [openApproval, setOpenApproval] = useState<PendingItem | null>(null)
+  const [openNotice, setOpenNotice] = useState<{ title: string; detail: string } | null>(null)
+  const [taskAttempt, setTaskAttempt] = useState(0)
+  const [noteAttempt, setNoteAttempt] = useState(0)
   const loadVersion = useRef(0)
-  const taskAnchor = useRef<HTMLDivElement | null>(null)
-  const noteAnchor = useRef<HTMLDivElement | null>(null)
-  const scrolledTask = useRef<string | null>(null)
-  const scrolledSlug = useRef<string | null>(null)
   const taskVisit = useRef(0)
   const fileAction = useSyncExternalStore(subscribeTaskFiles, taskFileSnapshot)
 
@@ -189,7 +107,6 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
   }, [])
 
   useEffect(() => {
-    scrolledSlug.current = null
     setSettledSlug(null)
     setNotes(null)
   }, [openSlug])
@@ -211,11 +128,10 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
       if (openSlug) setSettledSlug(openSlug)
     })
     return () => controller.abort()
-  }, [openSlug, overview?.generatedAt])
+  }, [openSlug, overview?.generatedAt, noteAttempt])
 
   useEffect(() => {
     taskVisit.current++
-    scrolledTask.current = null
     setSettledTaskId(null)
     setTaskOutcome(null)
     return () => { taskVisit.current++ }
@@ -240,21 +156,7 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
       setSettledTaskId(openTaskId)
     })
     return () => controller.abort()
-  }, [openTaskId, overview?.generatedAt])
-
-  useEffect(() => {
-    if (openTaskId && settledTaskId === openTaskId && scrolledTask.current !== openTaskId && taskAnchor.current) {
-      taskAnchor.current.scrollIntoView({ block: 'start' })
-      scrolledTask.current = openTaskId
-    }
-  }, [openTaskId, settledTaskId])
-
-  useEffect(() => {
-    if (openSlug && settledSlug === openSlug && scrolledSlug.current !== openSlug && noteAnchor.current) {
-      noteAnchor.current.scrollIntoView({ block: 'start' })
-      scrolledSlug.current = openSlug
-    }
-  }, [openSlug, settledSlug])
+  }, [openTaskId, overview?.generatedAt, taskAttempt])
 
   const runTaskAction = (taskId: string, action: () => TaskActionOutcome | Promise<TaskActionOutcome>): void => {
     const visit = taskVisit.current
@@ -269,249 +171,245 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
   }
 
   const ledger = overview?.ledger
-  const usage: UsageTotals | undefined = ledger?.usage
-  const packs: PackEntry[] | undefined = overview?.packs
-  const notesList = noteEntries
   const openNote = notes?.kind === 'note' && notes.slug === openSlug ? notes : null
   const controls = runtimeView(overview?.runtimeControls)
+  const selectedTask = task?.task.id === openTaskId ? task : null
+  const selectedProblem = settledTaskId === openTaskId ? taskProblem : null
+  const noteError = openSlug !== null && settledSlug === openSlug && notes?.kind === 'error' ? notes.message : null
+  const noteListError = openSlug === null && notes?.kind === 'error' ? notes.message : undefined
+  const reviewCount = (ledger?.interrupted.length ?? 0) + (ledger?.pending.length ?? 0)
+    + (ledger?.proposedMemos ?? []).length + controls.attention.length
 
-  const header = h('div', {
-    style: {
-      display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
-      padding: '10px 14px', borderBottom: `1px solid ${T.border}`,
-    },
-  },
-  h('span', { style: { fontSize: '14px', fontWeight: '600', color: T.text } }, '管家工作台'),
-  h('span', { style: { fontSize: '11px', color: T.dim } },
-    overview === null ? '正在读取…' : `更新于 ${shortTime(overview.generatedAt)} · ${overview.timeZone}`),
-  h('span', { style: { flex: '1 1 auto' } }),
-  error === null
-    ? null
-    : h('span', { style: { fontSize: '11px', color: T.err } }, `读取失败：${error}`),
-  overview?.ledgerError === undefined
-    ? null
-    : h('span', { style: { fontSize: '11px', color: T.err } }, `账本不可用，原件已保留：${overview.ledgerError}`),
-  navProblem === null
-    ? null
-    : h('span', { style: { fontSize: '11px', color: T.warn, maxWidth: '320px' } }, navProblem),
-  h('button', {
-    type: 'button',
-    // The workbench is a dashboard: talking happens in the butler's own
-    // conversation, and this is the way in from here.
-    onClick: () => {
+  /** Close every detail drawer; used where a detail must not stack on another. */
+  const openTaskDetail = (id: string): void => {
+    setOpenSlug(null)
+    setOpenMemo(null)
+    setOpenApproval(null)
+    setOpenNotice(null)
+    setOpenTaskId(id)
+  }
+  const openNoteDetail = (slug: string): void => {
+    setOpenTaskId(null)
+    setOpenMemo(null)
+    setOpenApproval(null)
+    setOpenNotice(null)
+    setOpenSlug(slug)
+  }
+  const openMemoDetail = (memo: Memo): void => {
+    setOpenTaskId(null)
+    setOpenSlug(null)
+    setOpenApproval(null)
+    setOpenNotice(null)
+    setOpenMemo(memo)
+  }
+  const openApprovalDetail = (item: PendingItem): void => {
+    setOpenTaskId(null)
+    setOpenSlug(null)
+    setOpenMemo(null)
+    setOpenNotice(null)
+    setOpenApproval(item)
+  }
+  const openNoticeDetail = (title: string, detail: string): void => {
+    setOpenTaskId(null)
+    setOpenSlug(null)
+    setOpenMemo(null)
+    setOpenApproval(null)
+    setOpenNotice({ title, detail })
+  }
+
+  const statusBar = workbenchStatusBar({
+    overview,
+    controls,
+    reviewCount,
+    error,
+    navProblem,
+    onRefresh: () => { void load() },
+    onTalk: () => {
       void openButlerConversation(ctx, overview?.session?.id).then((outcome) => {
         setNavProblem(outcome.ok ? null : (outcome.reason ?? '打不开管家会话'))
       })
     },
-    title: overview?.session === undefined
-      ? '打开和管家的专属对话'
-      : `打开和管家的专属对话（${overview.session.id}）`,
-    style: {
-      fontSize: '12px', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer',
-      color: '#fff', background: T.brand, border: `1px solid ${T.brand}`,
-    },
-  }, '和管家说话'),
-  h('button', {
-    type: 'button',
-    onClick: () => { void load() },
-    style: {
-      fontSize: '12px', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer',
-      color: T.text, background: T.bg2, border: `1px solid ${T.border2}`,
-    },
-  }, '刷新'))
+  })
 
-  const grid = h('div', {
+  const body = overview === null
+    ? error === null
+      ? h('div', { style: { flex: '1 1 auto', minHeight: '0', padding: '16px' } },
+        h(LoadingBlock, { label: '正在读取管家状态…', lines: 5 }))
+      : h('div', { style: { flex: '1 1 auto', minHeight: '0', padding: '16px' } },
+        h(ErrorState, {
+          title: '管家状态读取失败',
+          message: error,
+          retry: () => { void load() },
+          retryLabel: '重试',
+          retained: '还没有可显示的管家快照；重试会重新读取。',
+        }))
+    : h('div', { className: 'butler-scroll', style: { flex: '1 1 auto', minHeight: '0', padding: '12px 16px' } },
+      h('div', { className: 'butler-stack' },
+        todayZone({ overview, openTask: openTaskDetail, selectedTaskId: openTaskId }),
+        decisionsZone({ overview, openTask: openTaskDetail, openMemo: openMemoDetail, openApproval: openApprovalDetail, openNotice: openNoticeDetail, selectedTaskId: openTaskId }),
+        resourcesZone({
+          overview,
+          notes: noteEntries,
+          notesError: noteListError,
+          onRetryNotes: () => setNoteAttempt(value => value + 1),
+          openNote: openNoteDetail,
+          selectedSlug: openSlug,
+        }),
+        systemZone({ overview, openTask: openTaskDetail, onRefresh: () => { void load() } })))
+
+  const footerLine = overview === null
+    ? (error === null ? '正在读取管家状态…' : '管家状态读取失败')
+    : `数据目录 ${overview.vault.home} · 记录器版本 ${overview.runtimeControls?.version ?? '未提供'}`
+  const footer = h('div', {
+    className: 'butler-muted',
     style: {
-      display: 'grid', gap: '12px', padding: '12px 14px',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', alignItems: 'start',
+      flex: '0 0 auto', padding: '8px 16px',
+      borderTop: `1px solid ${BUTLER_COLORS.borderL1}`, overflowWrap: 'anywhere',
     },
+  }, footerLine)
+
+  const taskDrawer = openTaskId === null ? null : h(Drawer, {
+    open: true,
+    onClose: () => setOpenTaskId(null),
+    title: selectedTask?.task.title ?? '任务详情',
+    subtitle: selectedTask === null
+      ? (selectedProblem === null ? '正在读取任务详情…' : '读取失败')
+      : `任务 ${selectedTask.task.id} · 更新 ${shortTime(selectedTask.task.updatedAt)}`,
+    size: 'lg',
+    closeLabel: '关闭',
+    id: 'butler-task-drawer',
   },
-  section('运行保护与预算', controls.budgetCount, h('div', {}, runtimeContent(controls, setOpenTaskId),
-    h(HistorySection<'budgets'>, { kind: 'budgets', limit: 12,
-      preview: emptyLine('浏览保存的全部运行预算，含同会话较早的运行及停止记录。'),
-      renderPage: (page: HistoryPage<'budgets'>) => h('div', {}, emptyLine('保存的运行预算；旧运行未记录的限额与剩余保持未知。'),
-        page.items.length ? budgetViews(page.items).map(budgetRow) : emptyLine('没有保存的运行预算。')) }))),
-  section('今日待办 / 在跑的事', ledger?.open.length, ledger === undefined || ledger.open.length === 0
-    ? emptyLine(overview?.ledgerError ? '账本读取失败，无法判断待办数量。' : '没有在跑的事。跟我说要做什么就行。')
-    : h('div', {}, ledger.open.map(row => taskRow(row, setOpenTaskId, row.id === openTaskId, overview?.runtimeControls?.reminderOperations)))),
-  section('任务记录', overview?.taskHistory?.total, overview?.taskHistory === undefined
-    ? emptyLine('任务记录暂不可读；已完成任务需要独立详情。')
-    : h(HistorySection<'tasks'>, { kind: 'tasks', limit: 50,
-      preview: h('div', { style: { maxHeight: '300px', overflow: 'auto' } }, overview.taskHistory.tasks.length
-        ? overview.taskHistory.tasks.map(row => taskRow(row, setOpenTaskId, row.id === openTaskId, overview?.runtimeControls?.reminderOperations)) : emptyLine('还没有任务记录。'),
-        overview.taskHistory.total > overview.taskHistory.tasks.length ? emptyLine(`首屏 ${overview.taskHistory.tasks.length}/${overview.taskHistory.total} 项，可浏览完整历史。`) : null),
-      renderPage: (page: HistoryPage<'tasks'>) => h('div', { style: { maxHeight: '360px', overflow: 'auto' } },
-        page.items.length ? page.items.map(row => taskRow(row, setOpenTaskId, row.id === openTaskId, overview?.runtimeControls?.reminderOperations)) : emptyLine('还没有任务记录。')) })),
-  section('记忆状态与来源', overview?.memory?.total, memoryContent(overview?.memory, overview?.memoryError)),
-  section('在等你点头', ledger?.pending.length, ledger === undefined || ledger.pending.length === 0
-    ? emptyLine(overview?.ledgerError ? '审批账本不可用，无法判断待批数量。' : '没有等你决定的事。外部动作我都不会自己执行。')
-    : h('div', {}, ledger.pending.map((item) => h('div', {
-      style: { padding: '6px 0', borderTop: `1px solid ${T.border}` },
-    },
-    h('div', { style: { fontSize: '13px', color: T.text } }, item.title),
-    h('div', { style: { fontSize: '11px', color: T.dim } }, `因为：${item.reason}`))))),
-  section('技能包', packs === undefined || packs.length === 0 ? undefined : packs.filter((pack) => pack.enabled).length,
-    overview?.packsError !== undefined
-      ? emptyLine(`能力包列表读不出来：${overview.packsError}`)
-      : packs === undefined || packs.length === 0
-        ? emptyLine('没有可用的能力包。装包用 butler_pack，或自己在 vault/packs 里写一个。')
-        : h('div', {}, packs.map(packRow))),
-  section('文档 Space', notesList.length === 0 ? undefined : notesList.length, notesList.length === 0
-    ? emptyLine('还没有笔记。让管家整理一篇就会出现在这里。')
-    : h('div', {}, notesList.map((entry) => noteRow(entry, setOpenSlug, openNote?.slug === entry.path.replace(/^notes\//, '').replace(/\.md$/, ''))))),
-  section('它刚做了什么', undefined, ledger === undefined || ledger.recent.length === 0
-    ? emptyLine('还没有工具回执。每次工具调用都会在这里留一行。')
-    : h(HistorySection<'recentReceipts'>, { kind: 'recentReceipts',
-      preview: h('div', {}, ledger.recent.slice(0, 12).map(receiptRow)),
-      renderPage: (page: HistoryPage<'recentReceipts'>) => h('div', {}, emptyLine('全局工具回执；没有任务身份的旧记录保持归属未知。'),
-        page.items.length ? page.items.map(receiptRow) : emptyLine('没有工具回执。')) })))
+  selectedTask !== null
+    ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: BUTLER_SPACE.md, minWidth: '0' } },
+      // A poll can fail after a detail was settled; keep the snapshot on screen
+      // and say so, instead of showing stale data silently or blanking it.
+      selectedProblem === null
+        ? null
+        : h(InlineError, {
+          message: `任务详情读取失败：${selectedProblem}；已保留上次快照。`,
+          retry: () => setTaskAttempt(value => value + 1),
+          retryLabel: '重试',
+        }),
+      taskDetailPane(selectedTask, () => setOpenTaskId(null), receiptRow, path => {
+        const prefix = `${overview?.vault.home.replaceAll('\\', '/') ?? ''}/notes/`, normalized = path.replaceAll('\\', '/')
+        if (normalized.toLowerCase().startsWith(prefix.toLowerCase())) {
+          const relative = normalized.slice(prefix.length)
+          if (/^[^/]+\.md$/i.test(relative)) { openNoteDetail(relative.slice(0, -3)); return }
+        }
+        setTaskOutcome({
+          taskId: selectedTask.task.id,
+          outcome: { ok: false, message: '这个产物不在笔记目录，请用 DSH 打开文件或按记录路径打开。' },
+        })
+      }, {
+        openFile: path => runTaskAction(selectedTask.task.id, () => openTaskFile(ctx, selectedTask.task.id, selectedTask.task.sessionId, path)),
+        copyContinuation: () => runTaskAction(selectedTask.task.id, () => copyTaskContinuation(selectedTask.task.id)),
+        continueWithButler: () => runTaskAction(selectedTask.task.id, () => continueTaskWithButler(ctx)),
+        openSourceConversation: () => runTaskAction(selectedTask.task.id, () => openTaskSourceConversation(ctx, selectedTask.task.sessionId)),
+        outcome: taskOutcome?.taskId === selectedTask.task.id ? taskOutcome.outcome : undefined,
+      }))
+    : selectedProblem !== null
+      ? h(ErrorState, {
+        title: '任务详情读取失败',
+        message: selectedProblem,
+        retry: () => setTaskAttempt(value => value + 1),
+        retryLabel: '重试',
+        retained: '来源记录仍保留在账本中；关闭抽屉不会改动任务。',
+      })
+      : h(LoadingBlock, { label: '正在读取所选任务…', lines: 4 }))
 
-  const selectedTask = task?.task.id === openTaskId ? task : null
-  const selectedProblem = settledTaskId === openTaskId ? taskProblem : null
-  const taskPane = !openTaskId ? null : h('div', { ref: taskAnchor },
-    selectedTask ? null : h('div', { style: { margin: '0 14px 10px', fontSize: '12px' } },
-      selectedProblem ? h('div', { role: 'alert', style: { color: T.warn } }, `任务详情读取失败：${selectedProblem}`) : emptyLine('正在读取所选任务…'),
-      h('button', { type: 'button', style: buttonStyle, onClick: () => setOpenTaskId(null) }, '关闭任务详情')),
-    selectedTask && selectedProblem ? h('div', { role: 'alert', style: { color: T.warn, margin: '0 14px 10px', fontSize: '12px' } }, `任务详情读取失败：${selectedProblem}`) : null,
-    selectedTask ? taskDetailPane(selectedTask, () => setOpenTaskId(null), receiptRow, path => {
-      const prefix = `${overview?.vault.home.replaceAll('\\', '/') ?? ''}/notes/`, normalized = path.replaceAll('\\', '/')
-      if (normalized.toLowerCase().startsWith(prefix.toLowerCase())) {
-        const relative = normalized.slice(prefix.length)
-        if (/^[^/]+\.md$/i.test(relative)) { setOpenSlug(relative.slice(0, -3)); return }
-      }
-      setTaskOutcome({ taskId: selectedTask.task.id, outcome: { ok: false, message: '这个产物不在笔记目录，请用 DSH 打开文件或按记录路径打开。' } })
-    }, {
-      openFile: path => runTaskAction(selectedTask.task.id, () => openTaskFile(ctx, selectedTask.task.id, selectedTask.task.sessionId, path)),
-      copyContinuation: () => runTaskAction(selectedTask.task.id, () => copyTaskContinuation(selectedTask.task.id)),
-      continueWithButler: () => runTaskAction(selectedTask.task.id, () => continueTaskWithButler(ctx)),
-      openSourceConversation: () => runTaskAction(selectedTask.task.id, () => openTaskSourceConversation(ctx, selectedTask.task.sessionId)),
-      outcome: taskOutcome?.taskId === selectedTask.task.id ? taskOutcome.outcome : undefined,
-    }) : null)
-
-  const notePane = openSlug === null
-    ? null
-    : h('div', {
-      ref: noteAnchor,
-      style: {
-        margin: '0 14px 12px', padding: '10px 12px', background: T.bg,
-        border: `1px solid ${T.border}`, borderRadius: '8px',
-      },
-    },
-    h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' } },
-      h('span', { style: { fontSize: '12px', color: T.text, fontWeight: '600' } }, openSlug),
-      openNote ? h('span', { style: { fontSize: '11px', color: T.dim } }, openNote.path) : null,
+  const noteDrawer = openSlug === null ? null : h(Drawer, {
+    open: true,
+    onClose: () => setOpenSlug(null),
+    title: openSlug,
+    subtitle: openNote?.path ?? '正在读取笔记…',
+    size: 'md',
+    closeLabel: '关闭笔记详情',
+    id: 'butler-note-drawer',
+  },
+  h('div', { style: { display: 'flex', flexDirection: 'column', gap: BUTLER_SPACE.sm, minWidth: '0' } },
+    h('div', { className: 'butler-row' },
+      h('span', { style: { fontSize: '12px', lineHeight: '18px', color: BUTLER_COLORS.labelSecondary } },
+        openNote?.path ?? '笔记'),
       h('span', { style: { flex: '1 1 auto' } }),
       h('button', {
         type: 'button',
-        onClick: () => { setOpenSlug(null) },
-        style: {
-          fontSize: '11px', padding: '2px 8px', borderRadius: '6px', cursor: 'pointer',
-          color: T.text, background: T.bg2, border: `1px solid ${T.border2}`,
-        },
+        className: 'butler-btn butler-btn--secondary butler-btn--sm',
+        onClick: () => setOpenSlug(null),
       }, '关闭')),
-    notes?.kind === 'error' && settledSlug === openSlug ? h('div', { role: 'alert', style: { color: T.warn, fontSize: '12px' } }, `笔记读取失败：${notes.message}`) : null,
-    openNote ? h('pre', {
-      style: {
-        margin: '0', fontSize: '12px', lineHeight: '1.55', color: T.text,
-        whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '360px', overflow: 'auto',
-      },
-    }, openNote.text) : notes?.kind === 'error' && settledSlug === openSlug ? null : emptyLine('正在读取所选笔记…'))
+    noteError !== null
+      ? h(ErrorState, {
+        title: '笔记读取失败',
+        message: noteError,
+        retry: () => setNoteAttempt(value => value + 1),
+        retryLabel: '重试',
+        retained: '工作台其余部分不受影响；关闭抽屉不会改动笔记文件。',
+      })
+      : openNote === null
+        ? h(LoadingBlock, { label: '正在读取所选笔记…', lines: 5 })
+        : h('pre', {
+          className: 'butler-scroll',
+          style: {
+            margin: '0', fontSize: '12px', lineHeight: '1.55', color: BUTLER_COLORS.labelPrimary,
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 'calc(100vh - 220px)', overflow: 'auto',
+          },
+        }, openNote.text)))
 
-  const footerParts: string[] = []
-  if (overview !== null) {
-    footerParts.push(`资料库 ${overview.vault.home}`)
-    footerParts.push(`${overview.vault.files.length} 个文件`)
-    footerParts.push(`提醒 ${overview.remindersAvailable ? String(overview.reminders.filter((r) => r.status !== 'inactive').length) : '未读到'}`)
-    if (usage !== undefined) {
-      if (usage.calls > 0) {
-        const display = usageView(usage)
-        const hit = Math.round(usage.cacheHitRate * 100)
-        const live = `实时 ${usage.liveCalls}`
-        const recovered = usage.backfilledCalls > 0 ? ` + 启动回填 ${usage.backfilledCalls}` : ''
-        const used: string[] = [
-          `${usage.calls} 次已记录模型调用（本机全部会话：${live}${recovered}）`,
-          `提供方已报告 ${display.tokenText} tokens`,
-          `已报告未缓存输入 ${shortNumber(usage.inputTokens)} / 输出 ${shortNumber(usage.outputTokens)}`,
-        ]
-        if (usage.cacheReadTokens > 0) {
-          used.push(`缓存读 ${shortNumber(usage.cacheReadTokens)}（占已报告输入 ${hit}%）`)
-        }
-        if (usage.reasoningTokens > 0) used.push(`推理 ${shortNumber(usage.reasoningTokens)}`)
-        if (usage.sessions > 1) used.push(`来自 ${usage.sessions} 个会话`)
-        footerParts.push(used.join('，'))
-        footerParts.push(...usageBreakdownView(usage))
-        footerParts.push(...usageCostBreakdownView(usage))
-        footerParts.push(`费用：${display.costText}（估算，非账单）`)
-        if (usage.pricedCalls > 0) {
-          if (usage.byProviderModel === undefined) footerParts.push(`计价依据（旧服务未提供逐模型细分）：${basisLabel(usage.costBasis)}`)
-          if (usage.derivedCalls > 0) footerParts.push(`其中 ${usage.derivedCalls} 次按已存价目表回算，依据见成本细分`)
-        }
-        const other = Math.max(0, usage.calls - usage.butlerCalls - usage.scopeUnknown)
-        const unknown =
-          usage.scopeUnknown > 0 ? `，另有 ${usage.scopeUnknown} 次归属未定` : ''
-        footerParts.push(
-          `其中管家会话 ${usage.butlerCalls} 次 / 已报告未缓存输入与输出 ${shortNumber(usage.butlerNewTokens)} tokens，其他会话 ${other} 次${unknown}`,
-        )
-      } else {
-        footerParts.push('用量：还没记录到模型调用')
-      }
-      footerParts.push('覆盖：助手回复由会话事件及日志回填记录；会话命名、上下文压缩在插件运行时实时观察。其他用途、无用途标记的辅助流及未加载时段未保证覆盖，未知用量与未计价部分未包含在金额中。')
-    }
-    const backfill = overview.usageBackfill
-    if (backfill !== undefined) {
-      if (backfill.running) footerParts.push('启动回填：正在核对会话日志')
-      else if (backfill.problem !== undefined) footerParts.push(`启动回填失败：${backfill.problem}`)
-      else if (backfill.added > 0) footerParts.push(`启动回填补记 ${backfill.added} 次调用（实时记录漏掉的）`)
-      if (backfill.last) {
-        if (backfill.last.ambiguousLegacy > 0) footerParts.push(`${backfill.last.ambiguousLegacy} 条旧用量记录无法唯一配对，已保留待核对，总量可能重叠`)
-        if (backfill.last.skips.length > 0) footerParts.push(`回填跳过 ${backfill.last.skips.length} 项：${backfill.last.skips.slice(0, 2).join('；')}`)
-        if (backfill.last.problems.length > 0) footerParts.push(`回填问题：${backfill.last.problems.slice(0, 2).join('；')}`)
-      }
-    }
-    const recorder = overview.usageRecorder
-    if (recorder !== undefined && (recorder.listening === false || recorder.problem !== undefined)) {
-      footerParts.push(`用量记录没接上：${recorder.problem ?? 'session/event 事件未订阅'}`)
-    }
-    if (recorder !== undefined && recorder.withoutUsage > 0) {
-      footerParts.push(`${recorder.withoutUsage} 次调用没有用量字段（按未知计，不当成 0）`)
-    }
-    if (recorder !== undefined && recorder.unpriced > 0) {
-      footerParts.push(`${recorder.unpriced} 次实时记录未取得计价金额（包括缺用量；费用未知）`)
-    }
-    if (recorder !== undefined && (recorder.auxiliaryListening === false || recorder.auxiliaryProblem !== undefined)) {
-      footerParts.push(`辅助用量观察：${recorder.auxiliaryProblem ?? 'llm/stream 事件未订阅'}`)
-    }
-    if (recorder !== undefined && recorder.uncoveredPurposeStreams > 0) {
-      footerParts.push(`${recorder.uncoveredPurposeStreams} 次流使用未识别用途，未按辅助调用计入；若为助手回复仍由原生事件记录`)
-    }
-    if (recorder !== undefined && recorder.failed > 0) {
-      footerParts.push(`用量记录出错 ${recorder.failed} 次`)
-    }
-    if (ledger !== undefined && ledger.interrupted.length > 0) {
-      footerParts.push(`重启打断 ${ledger.interrupted.length} 件（未自动重试）`)
-    }
-    if (overview.remindersError !== undefined) footerParts.push(overview.remindersError)
-    const session = overview.session
-    if (session !== undefined) {
-      footerParts.push(`会话 ${session.id}（${SESSION_LABEL[session.state]}，标题「${session.title}」${session.titlePinned ? '已钉住' : '未钉住'}）`)
-      if (session.note !== undefined && session.note !== '') footerParts.push(session.note)
-    }
-    if (overview.sessionError !== undefined) footerParts.push(`会话读不到：${overview.sessionError}`)
-  }
+  const memoDrawer = openMemo === null ? null : h(Drawer, {
+    open: true,
+    onClose: () => setOpenMemo(null),
+    title: '记忆提案',
+    subtitle: '待你确认',
+    size: 'sm',
+    closeLabel: '关闭',
+    id: 'butler-memo-drawer',
+  },
+  h('div', { style: { display: 'flex', flexDirection: 'column', gap: BUTLER_SPACE.sm, minWidth: '0' } },
+    h(KeyValue, { label: '内容', value: openMemo.text }),
+    h(KeyValue, { label: '来源', value: openMemo.source === 'user' ? '你的明确输入' : '管家提出' }),
+    h(KeyValue, { label: '创建', value: shortTime(openMemo.createdAt) }),
+    h(KeyValue, { label: '状态', value: '待确认', tone: 'warn' }),
+    h('p', { className: 'butler-muted', style: { margin: '0' } }, '确认、更正与撤回通过对话的记忆工具处理，沿用可信用户确认。')))
 
-  const footer = h('div', {
-    style: {
-      padding: '8px 14px 14px', fontSize: '11px', color: T.dim,
-      borderTop: `1px solid ${T.border}`, wordBreak: 'break-word',
-    },
-  }, footerParts.length === 0 ? '正在读取管家状态…' : footerParts.join(' · '))
+  const approvalDrawer = openApproval === null ? null : h(Drawer, {
+    open: true,
+    onClose: () => setOpenApproval(null),
+    title: openApproval.title,
+    subtitle: '待你决定',
+    size: 'sm',
+    closeLabel: '关闭',
+    id: 'butler-approval-drawer',
+  },
+  h('div', { style: { display: 'flex', flexDirection: 'column', gap: BUTLER_SPACE.sm, minWidth: '0' } },
+    h(KeyValue, { label: '原因', value: openApproval.reason }),
+    h(KeyValue, { label: '状态', value: '待你决定', tone: 'warn' }),
+    h(KeyValue, { label: '创建', value: shortTime(openApproval.createdAt) }),
+    h(KeyValue, { label: '关联任务', value: openApproval.taskId ?? '未记录' }),
+    openApproval.taskId === undefined
+      ? null
+      : h('button', {
+        type: 'button',
+        className: 'butler-btn butler-btn--secondary butler-btn--sm',
+        onClick: () => { setOpenApproval(null); openTaskDetail(openApproval.taskId!) },
+      }, '查看关联任务'),
+    h('p', { className: 'butler-muted', style: { margin: '0' } }, '外部动作不会自己执行；批准与否通过对话中的审批工具完成。')))
+
+  const noticeDrawer = openNotice === null ? null : h(Drawer, {
+    open: true,
+    onClose: () => setOpenNotice(null),
+    title: openNotice.title,
+    subtitle: '待核对',
+    size: 'sm',
+    closeLabel: '关闭',
+    id: 'butler-notice-drawer',
+  },
+  h('div', { style: { display: 'flex', flexDirection: 'column', gap: BUTLER_SPACE.sm, minWidth: '0' } },
+    h(KeyValue, { label: '原因', value: openNotice.detail }),
+    h(KeyValue, { label: '状态', value: '待核对', tone: 'warn' }),
+    h('p', { className: 'butler-muted', style: { margin: '0' } }, '这是宿主记录的当前快照；核对完成前不会自动重试或外发。')))
 
   return h('div', {
     'data-dsh-plugin': PANEL_ID,
     'data-dsh-butler-view': '',
-    style: {
-      height: '100%', overflow: 'auto', background: T.bg2 ?? 'transparent',
-      color: T.text, display: 'flex', flexDirection: 'column',
-    },
-  }, header, grid, taskPane, openSlug === null && settledSlug === null && notes?.kind === 'error' ? emptyLine(`笔记读取失败：${notes.message}`) : null, notePane, footer)
+    className: 'butler-page',
+  }, h(ButlerStyles), statusBar, body, footer, taskDrawer, noteDrawer, memoDrawer, approvalDrawer, noticeDrawer)
 }
