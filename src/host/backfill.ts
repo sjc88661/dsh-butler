@@ -30,8 +30,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
-import { addReceipt, addUsageBatch, appendDaily, hasReportedUsage, usageKey, usageRecords, usageScope, type Usage } from './ledger.ts'
+import { addReceipt, addUsageBatch, hasReportedUsage, usageKey, usageRecords, usageScope, type Usage } from './ledger.ts'
 import { priceUsage } from './usage.ts'
+import { appendLine, statePath } from './vault.ts'
 
 /** Zstd frame magic, little-endian on disk. */
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
@@ -434,6 +435,44 @@ function* usageBackfillSteps(options: BackfillRunOptions): Generator<void, Backf
   return result
 }
 
+/**
+ * Machine-readable home for backfill runs. The owner-facing daily page is for
+ * human decisions (reminders, tasks), so routine "nothing to add" bookkeeping
+ * goes here instead of polluting it.
+ */
+export function usageBackfillLogPath(): string {
+  return statePath('logs', 'usage-backfill.log')
+}
+
+/**
+ * Append one JSON line describing a run. Diagnostics must never fail the run
+ * itself, so a write error is reported to the host logger and swallowed.
+ */
+function logBackfillRun(result: BackfillResult, summary: string,
+  logger?: UsageBackfillOptions['logger']): void {
+  try {
+    appendLine(usageBackfillLogPath(), JSON.stringify({
+      version: 1,
+      at: new Date().toISOString(),
+      summary,
+      added: result.added,
+      reconciled: result.reconciled,
+      already: result.already,
+      scanned: result.scanned,
+      files: result.files,
+      sessions: result.sessions,
+      withoutUsage: result.withoutUsage,
+      unpriced: result.unpriced,
+      badFrames: result.badFrames,
+      skips: result.skips,
+      problems: result.problems,
+      ms: result.ms,
+    }))
+  } catch (error) {
+    logger?.warn?.('[dsh-butler] 用量回填写诊断日志失败：%s', String(error))
+  }
+}
+
 /** What the workbench reports about the backfill. */
 export interface UsageBackfillState {
   /** Cancel a pending/in-flight run when the plugin's host effect is disposed. */
@@ -450,7 +489,11 @@ export interface UsageBackfillState {
 
 /** Dependencies the installer borrows from the host, all optional. */
 export interface UsageBackfillOptions {
-  /** Zone for the daily log line. */
+  /**
+   * Zone for the daily log line.
+   * @deprecated Backfill runs no longer write the owner's daily page; the field
+   * stays so existing call sites keep type-checking.
+   */
   timeZone: string
   /** Delay before the run, so the first paint does not wait for log decoding. */
   afterMs?: number
@@ -472,10 +515,12 @@ export interface UsageBackfillOptions {
  * Run the backfill once, a moment after startup.
  *
  * Deferred and sliced on purpose: frame decoding is synchronous work, so the
- * background driver shares the event loop between bounded batches. The run leaves a receipt and a daily-log
- * line, so "the numbers changed" is always traceable to something.
+ * background driver shares the event loop between bounded batches. A run that
+ * changed the ledger leaves a receipt and a machine-readable line in
+ * `state/logs/usage-backfill.log`, so "the numbers changed" is always traceable
+ * to something; routine runs do not write the owner's daily pages.
  *
- * @param options - zone, delay, and the host services to borrow.
+ * @param options - delay and the host services to borrow.
  * @returns the live state, which the API reports to the panel.
  */
 export function installUsageBackfill(options: UsageBackfillOptions): UsageBackfillState {
@@ -516,7 +561,7 @@ export function installUsageBackfill(options: UsageBackfillOptions): UsageBackfi
           summary: `${summary}${result.problems.length > 0 ? `；问题：${result.problems.join(' / ')}` : ''}`,
           ...(result.problems.length > 0 ? { error: result.problems.join(' / ') } : {}),
         })
-        appendDaily(options.timeZone, `- [用量回填] ${summary}`)
+        logBackfillRun(result, summary, options.logger)
       }
       if (result.problems.length > 0) options.logger?.warn?.('[dsh-butler] 用量回填有问题：%s', result.problems.join(' / '))
       else options.logger?.info?.('[dsh-butler] %s', summary)

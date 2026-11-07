@@ -93,7 +93,7 @@ export interface ButlerSessionManager {
   /** Create or resume the conversation; never rejects. */
   ensure(): Promise<ButlerSessionInfo>
   /** Flush, validate and durably account this exact Session before UI navigation. */
-  ensureReady(): Promise<ButlerSessionInfo>
+  ensureReady(request?: { force?: boolean }): Promise<ButlerSessionInfo>
   /** The last answer without touching the host, for synchronous readers. */
   peek(): ButlerSessionInfo | undefined
   /** Where the attempt was recorded, for the workbench footer. */
@@ -105,6 +105,15 @@ export const DEFAULT_BUTLER_SESSION_ID = 'session-butler'
 
 /** The default title; the owner may change it through the plugin config. */
 export const DEFAULT_BUTLER_SESSION_TITLE = '管家'
+
+/**
+ * How long a fully-validated readiness stays valid for pollers.
+ *
+ * The read API is polled; re-running flush/readSession/attachSession every poll
+ * was measurable CPU and I/O. Failures are never cached, and explicit
+ * navigation can force a fresh check.
+ */
+export const READY_CACHE_MS = 5 * 60 * 1000
 
 /** Human-readable form of an unknown throwable. */
 function message(error: unknown): string {
@@ -187,6 +196,8 @@ export function createButlerSession(
   let cached: ButlerSessionInfo | undefined
   let inflight: Promise<ButlerSessionInfo> | undefined
   let readyInflight: Promise<ButlerSessionInfo> | undefined
+  /** When the last fully-validated readiness was confirmed, for the poll TTL. */
+  let readyAt: number | undefined
   const recordVersions = new WeakMap<ButlerSessionInfo, string | undefined>()
 
   /** Read the record written by the previous attempt. */
@@ -339,7 +350,11 @@ export function createButlerSession(
       })
       return await inflight
     },
-    async ensureReady(): Promise<ButlerSessionInfo> {
+    async ensureReady(request?: { force?: boolean }): Promise<ButlerSessionInfo> {
+      // The panel polls the read API; a readiness that was fully validated a
+      // moment ago stays valid for a while, so polling stops re-running
+      // flush/readSession/attachSession every time. Failures are never cached.
+      if (request?.force !== true && cached?.ready !== undefined && readyAt !== undefined && Date.now() - readyAt < READY_CACHE_MS) return cached
       if (readyInflight !== undefined) return await readyInflight
       readyInflight = (async () => {
         let info: ButlerSessionInfo | undefined
@@ -368,6 +383,7 @@ export function createButlerSession(
           if (readText(recordFile) !== recordVersions.get(info)) throw new Error('专属会话记录在准备期间发生变化，保留新原件并停止')
           const result: ButlerSessionInfo = { ...info, ready: { id: info.id, canonicalCwd: cwd, workspaceId, attached: true, flushed: true } }
           cached = result
+          readyAt = Date.now()
           return result
         } catch (error) { return failed(error, info) }
       })().finally(() => { readyInflight = undefined })

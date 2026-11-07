@@ -66,14 +66,16 @@ test('legacy scheduled messages are delivered only once to a dedicated agent', a
 test('cancellation resolves the dedicated owner through the scheduler catalog', async () => {
   environment()
   let request
-  const scheduler = { catalog: async () => [{ id: 'schedule-1', sessionId: 'session-butler-reminder-abc' }], delete: async ref => { request = ref; return { id: ref.id, deleted: true } } }
+  // 0.2.2 catalog rows carry the destination under `target`, and cancellation is edit({ action: 'delete' }).
+  const scheduler = { catalog: async () => [{ id: 'schedule-1', target: { kind: 'session', sessionId: 'session-butler-reminder-abc' } }],
+    edit: async value => { request = value; return { id: value.id, deleted: true } } }
   await deleteOwnedReminder(scheduler, 'development', 'schedule-1')
-  assert.deepEqual(request, { sessionId: 'session-butler-reminder-abc', id: 'schedule-1' })
+  assert.deepEqual(request, { id: 'schedule-1', action: 'delete' })
 })
 
 test('a missing catalog ID is reported instead of cancelling an unrelated rule', async () => {
   environment()
-  const scheduler = { catalog: async () => [], delete: async () => { throw new Error('must not delete') } }
+  const scheduler = { catalog: async () => [], edit: async () => { throw new Error('must not delete') } }
   assert.equal((await deleteOwnedReminder(scheduler, 'development', 'missing')).deleted, false)
 })
 

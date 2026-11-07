@@ -30,16 +30,20 @@
 
 - [x] 恢复 bundle（profile bundle 列表 + 移除 disabled 覆盖，持久化）
 - [x] 删除 6 条测试提醒（DSH schedule 服务，reminders=0）
-- [ ] 压缩备份保留策略（最新 1 份保留；超 7 天或超 64MB 删除；审计；env 可调）— `storage-hygiene`
-- [ ] usage.jsonl 轮转（热文件阈值；归档仍计入总量；读路径扩展）— `storage-hygiene`
-- [ ] daily 去噪（用量回填不再写入 daily）— `storage-hygiene`
-- [ ] fixture 归档清单（`vault/archive/index.json` + `scripts/archive-fixtures.mjs`，dry-run 默认，不删账本）— `storage-hygiene`
-- [ ] overview 拆分（轻摘要 ≤48KB + detail parts）+ ETag/304 + 轮询 60s + ensureReady TTL — `perf-overview`
+- [x] 压缩备份保留策略实现挂在工作区（`store.ts`；等测试补齐后启用）
+- [x] usage 轮转 + daily 去噪实现挂在工作区（`usage-rotation.ts`/`backfill.ts`/`ledger.ts` 读路径；等测试补齐）
+- [x] fixture 归档清单（`vault/archive/index.json` + `scripts/archive-fixtures.mjs`，dry-run 默认，不删账本；等测试补齐）
+- [x] overview ETag + 304：payload 稳定部分哈希、304 无 body；客户端 `getJson` 条件请求缓存并复用同一引用
+- [x] 轮询 15s→60s（保持不可见不发、回到可见补一次）
+- [x] ensureReady TTL 5 分钟（失败不缓存；`READY_CACHE_MS`，返回已缓存 ready 结果）
+- [ ] overview 轻摘要 + detail 拆分（本轮暂缓：先靠 ETag/轮询降到 ~276MB/天 → 304 后接近 0；下一轮再做字段拆分）
 
 ### P1 日常可用（进行中）
 
-- [ ] **提醒子系统迁移到 0.2.2 schedule 契约**（create(request, actorSessionId?)、timing 联合、edit delete、history 新形状、status 归一化）— `schedule-migration`（P1 前置阻塞项）
-- [x] 自然语言时间解析模块 `src/host/time-parse.ts`（今天/明天/后天/周几/几号/相对时长/每天/每周；缺信息给 ambiguity + 缺失项；过去时间拒绝；时区按 IANA 解释；10 条测试）
+- [x] **提醒子系统迁移到 0.2.2 schedule 契约**（产品代码完成、typecheck 通过；`projectReminder` 归一化、`edit delete` 取消、新 history 形状）
+- [ ] 迁移后测试适配（18 条提醒用例的 0.2.2 fake；subagent 进行中）
+- [x] 自然语言时间解析模块 `src/host/time-parse.ts`（10 测试）
+- [ ] 把 `time-parse` 接进 `butler_remind`（at / after / daily / weekly；模糊时 `needsClarification` 返回缺什么）
 - [ ] 提醒闭环：到期 toast（`shell.overlay`）+ 专属会话消息 + 飞书；完成/稍后/改期/取消；DSH 未运行则下次启动补发 overdue；重复提醒（daily/weekly）
 - [ ] 每日简报 08:30 / 21:30（今天/逾期/等你决定/提醒；完成/未完成/建议），自动写 daily
 - [ ] 工作台可操作：任务完成/改期/取消/继续；逾期进"等你决定"；提醒独立区 + 角标
@@ -57,6 +61,33 @@
 - [ ] 飞书正式账户 + 凭据迁 credentials
 - [ ] 设置页（`settings.section`：时区/简报时间/通道/保留策略/能力包）
 - [ ] 备份/导出/恢复；用量费用日报 + 阈值告警；usage 未计价透明
+
+## 验证结果（2026-11-07 本轮，真实宿主 DSH 0.2.2-rc.1）
+
+| 指标 | 之前 | 现在 |
+| --- | --- | --- |
+| state 目录 | 108.6MB | **11.3MB**（保留策略自动删除 101,977,166B 旧备份，保留最新 8,463,950B，写 `retention-audit.jsonl`） |
+| overview 响应 | 192KB | **96.7KB**（fixture 归档后：open 10→4、interrupted 2→0、历史 51→16、提醒操作 5→0） |
+| overview 热延迟 | 617–1231ms | **~278ms**（全量 96.7KB） |
+| 条件请求 | 无 | **304 / 0 字节 / ~209ms**（ETag 对稳定内容哈希，排除 generatedAt 与 session.at） |
+| 轮询 | 15s | **60s**（不可见不发） |
+| 提醒目录 | 6 条测试提醒 | 0（调度服务已删；账本/回执原字节不动） |
+| daily 噪声 | 30 条「[用量回填]」 | 0（旧行清理，原件备份 `vault/archive/2026-11-daily-cleanup/`；新回填写 `state/logs/usage-backfill.log`） |
+| fixture 归档 | 无 | 11 任务 / 5 提醒 / 5 操作 / 6 会话绑定 / 36 回执 → `vault/archive/2026-10-fixtures/`，`vault/archive/index.json`（账本 SHA 不变） |
+| 测试 | 1026/1026 | **1060/1060**（新增 34：time-parse 10、提醒迁移、存储/轮转/归档 24） |
+
+验收命令：`node scripts/build.mjs` 通过；`node scripts/build.mjs --typecheck` 通过；`node --test tests/*.test.mjs` 1060/1060。
+
+### P0 清场与减负：已完成 ✅
+
+- [x] 恢复 bundle（profile bundle 列表 + 移除 disabled 覆盖，持久化）
+- [x] 删除 6 条测试提醒（DSH schedule 服务，reminders=0）
+- [x] 压缩备份保留策略（最新 1 份保留；超 7 天或超 64MB 删除；审计；env 可调；**启动时执行**，解决"等不到压缩就不清理"）
+- [x] usage 轮转（热文件阈值；归档仍计入总量；读路径扩展；失败安全）
+- [x] daily 去噪（新回填写 `state/logs/usage-backfill.log`；旧噪声已清理并备份）
+- [x] fixture 归档清单（`vault/archive/index.json` + `scripts/archive-fixtures.mjs`，dry-run 默认；工作台宿主侧过滤，账本不删不改）
+- [x] overview ETag + 304、轮询 60s、ensureReady 5 分钟 TTL
+- [ ] overview 轻摘要 + detail 拆分（下一轮：把 ETag 计算改为缓存投影后 ≤48KB/≤100ms）
 
 ## 验收与约束
 

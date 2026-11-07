@@ -113,7 +113,7 @@ test('task detail joins only exact task identities and reads history using the p
   assert.equal(detail.usage.calls, 2); assert.equal(detail.usage.totalTokens, 30); assert.equal(detail.usage.withoutUsage, 1)
   assert.equal(detail.usage.pricedCalls, 0); assert.equal(detail.usageRecords.length, 2)
   assert.deepEqual(detail.budgets.map(row => row.taskId), [run], 'Business task ID and execution budget ID must not be interchanged')
-  assert.deepEqual(historyCalls, [{ sessionId: 'session-butler-reminder-owned', id: 'owned-rule', limit: 20 }])
+  assert.deepEqual(historyCalls, [{ id: 'owned-rule', limit: 20 }])
   assert.equal(detail.reminder.history.available, true)
   assert.equal(detail.reminder.history.deliveryState, 'delivered')
   assert.equal(detail.reminder.history.records[0].messageId, 'native-delivery')

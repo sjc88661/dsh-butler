@@ -24,14 +24,17 @@ function environment(options = {}) {
   const number = ++sequence, created = [], deleted = [], historyRequests = [], destinations = [], rows = []
   let receipts = []
   const schedule = {
-    async create(sessionId, request) {
-      created.push({ sessionId, request })
-      const row = { id: `schedule-${number}-${created.length}`, sessionId, title: request.title, prompt: request.prompt, scheduledAt: '2030-01-02T03:04:00+08:00' }
+    // 0.2.2: one request object plus the acting butler session, never a session-first pair.
+    async create(request, actorSessionId) {
+      created.push({ request, actorSessionId })
+      const row = { id: `schedule-${number}-${created.length}`, kind: request.timing.kind, title: request.title, prompt: request.prompt,
+        scheduledAt: '2030-01-02T03:04:00+08:00', target: request.target, status: 'active' }
       rows.push(row)
       return row
     },
     async catalog() { return structuredClone(rows) },
-    async delete(ref) { deleted.push(ref); return { id: ref.id, deleted: true } },
+    // 0.2.2: cancellation is edit({ action: 'delete' }); ids are host-wide.
+    async edit(request) { deleted.push(request); return { id: request.id, deleted: true } },
     async history(ref) { historyRequests.push(ref); return { records: structuredClone(receipts) } },
     async list() { return [] }, async update() {},
   }
@@ -58,8 +61,11 @@ test('same complete native execution replays one successful rule and one busines
   assert.equal(first.ok, true)
   assert.deepEqual(replay, first)
   assert.equal(e.created.length, 1)
+  assert.equal(e.created[0].actorSessionId, e.identity.sessionId, 'the acting butler session is passed beside the request')
   assert.equal(e.destinations.length, 1)
   assert.equal(e.destinations[0].callKey, executionKey(e.identity))
+  assert.deepEqual(e.created[0].request.target, { kind: 'session', sessionId: first.reminder.sessionId })
+  assert.deepEqual(e.created[0].request.timing, { kind: 'at', at: { date: '2030-01-02', time: '03:04:00', time_zone: 'Asia/Shanghai' } })
   assert.notEqual(first.taskId, e.identity.runId)
   assert.equal(ledger.getTask(first.taskId).reminder.scheduleId, first.reminder.id)
   assert.equal(ledger.getTask(first.taskId).reminder.deliveryState, 'scheduled')
@@ -103,7 +109,7 @@ test('a relative reminder freezes its first host-clock instant for replay and re
   const first = await e.operations.create(request)
   assert.equal(first.ok, true)
   assert.equal(first.operation.request.at, '2026-10-21T03:01:00.000Z')
-  assert.equal(e.created[0].request.at, '2026-10-21T03:01:00.000Z')
+  assert.deepEqual(e.created[0].request.timing, { kind: 'at', at: '2026-10-21T03:01:00.000Z' })
   clock = '2026-10-21T04:00:00.000Z'
   const replay = await new ReminderOperations(e.settings).create(request)
   assert.deepEqual(replay, first)
@@ -206,14 +212,14 @@ test('cancel resolves the catalog owner and atomically closes the associated tas
   assert.equal(cancelled.cancelled, created.reminder.id)
   assert.equal(cancelled.taskId, created.taskId)
   assert.equal(ledger.getTask(created.taskId).status, 'cancelled')
-  assert.deepEqual(e.deleted, [{ sessionId: created.reminder.sessionId, id: created.reminder.id }])
+  assert.deepEqual(e.deleted, [{ id: created.reminder.id, action: 'delete' }])
   assert.deepEqual(replay, cancelled)
 })
 
 test('deleted false does not claim cancellation or close the business task', async () => {
   const e = environment()
   const created = await e.operations.create(e.create())
-  e.schedule.delete = async ref => { e.deleted.push(ref); return { id: ref.id, deleted: false, code: 'native_missing' } }
+  e.schedule.edit = async request => { e.deleted.push(request); return { id: request.id, deleted: false, code: 'native_missing' } }
   const result = await e.operations.cancel({ identity: { ...e.identity, step: 2 }, id: created.reminder.id, timeZone: e.reminder.timeZone })
   assert.equal(result.ok, false)
   assert.equal(result.cancelled, null)
@@ -235,7 +241,7 @@ test('history returns native records and distinguishes scheduled from delivered'
   assert.equal(result.deliveryState, 'delivered')
   assert.equal(ledger.getTask(created.taskId).status, 'running')
   assert.equal(ledger.getTask(created.taskId).reminder.deliveryState, 'delivered')
-  assert.deepEqual(e.historyRequests.at(-1), { sessionId: created.reminder.sessionId, id: created.reminder.id, limit: 7 })
+  assert.deepEqual(e.historyRequests.at(-1), { id: created.reminder.id, limit: 7 })
 })
 
 test('missing native history reports unavailable instead of synthesizing a successful receipt', async () => {
@@ -322,7 +328,7 @@ test('cancel legacy native rule uses the actual source owner without inventing a
   const result = await e.operations.cancel({ identity: e.identity, id: 'legacy-rule', timeZone: e.reminder.timeZone })
   assert.equal(result.ok, true)
   assert.equal(result.taskId, undefined)
-  assert.deepEqual(e.deleted, [{ sessionId: e.identity.sessionId, id: 'legacy-rule' }])
+  assert.deepEqual(e.deleted, [{ id: 'legacy-rule', action: 'delete' }])
 })
 
 test('empty native history stays unknown even when the scheduler accepted a rule', async () => {
@@ -411,7 +417,7 @@ test('a trusted source binding permits its isolated legacy destination and rejec
   assert.equal(deniedCancel.ok, false)
   const cancelled = await e.operations.cancel({ identity: e.identity, id: 'bound-legacy', timeZone: e.reminder.timeZone })
   assert.equal(cancelled.ok, true)
-  assert.deepEqual(e.deleted, [{ sessionId: destination, id: 'bound-legacy' }])
+  assert.deepEqual(e.deleted, [{ id: 'bound-legacy', action: 'delete' }])
 })
 
 test('session-local schedule ids remain independently addressable for their own sources', async () => {
@@ -432,7 +438,7 @@ test('session-local schedule ids remain independently addressable for their own 
   assert.equal(ledger.getTask(second.taskId).status, 'pending')
   const secondCancel = await e.operations.cancel({ identity: { ...secondIdentity, step: 2 }, id: 'session-local-id', timeZone: e.reminder.timeZone })
   assert.equal(secondCancel.ok, true)
-  assert.deepEqual(e.deleted, [{ sessionId: first.reminder.sessionId, id: 'session-local-id' }, { sessionId: second.reminder.sessionId, id: 'session-local-id' }])
+  assert.deepEqual(e.deleted, [{ id: 'session-local-id', action: 'delete' }, { id: 'session-local-id', action: 'delete' }])
 })
 
 test('two destinations with the same native id under one source remain explicitly ambiguous', async () => {

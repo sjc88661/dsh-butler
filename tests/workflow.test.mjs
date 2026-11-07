@@ -33,10 +33,20 @@ after(() => {
 function scheduler() {
   const rows = [], deliveries = [], calls = { create: 0, delete: 0 }
   return { rows, deliveries, calls, service: {
-    async create(sessionId, request) { calls.create++; const row = { ...request, id: `native-${randomUUID()}`, sessionId, scheduledAt: request.at, status: 'active' }; rows.push(row); return row },
-    async delete(ref) { calls.delete++; rows.find(row => row.id === ref.id).status = 'inactive'; return { id: ref.id, deleted: true } },
+    // 0.2.2: create(request, actorSessionId?) returns a catalog entry carrying `target`.
+    async create(request, actorSessionId) {
+      calls.create++
+      const at = request.timing.at
+      const row = { id: `native-${randomUUID()}`, kind: request.timing.kind, title: request.title, prompt: request.prompt,
+        target: request.target, scheduledAt: typeof at === 'string' ? at : `${at.date}T${at.time}`, status: 'active' }
+      rows.push(row)
+      return row
+    },
+    // 0.2.2: cancellation is edit({ id, action: 'delete' }); ids are host-wide.
+    async edit(request) { calls.delete++; rows.find(row => row.id === request.id).status = 'ended'; return { id: request.id, deleted: true } },
     catalog: () => structuredClone(rows),
-    history: async ref => ({ records: deliveries.filter(row => row.scheduleId === ref.id && row.sessionId === ref.sessionId).map(({ scheduleId, sessionId, ...row }) => row) }),
+    // 0.2.2 history is target-based: the rule id plus a page size.
+    history: async request => ({ records: deliveries.filter(row => row.scheduleId === request.id).map(({ scheduleId, sessionId, ...row }) => row) }),
   } }
 }
 

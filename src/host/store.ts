@@ -4,7 +4,7 @@
  * tool, a model, a scheduler, or any other external action.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, readSync, realpathSync, unlinkSync, writeSync, type BigIntStats } from 'node:fs'
+import { appendFileSync, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, realpathSync, statSync, unlinkSync, writeSync, type BigIntStats } from 'node:fs'
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { TextDecoder } from 'node:util'
 import { sha256, statePath, STATE_HOME, VAULT_HOME, writeBytes, writeText } from './vault.ts'
@@ -246,9 +246,26 @@ function keepCommittedOperations(): number {
   const configured = Number(process.env.DSH_BUTLER_JOURNAL_KEEP_COMMITTED)
   return Number.isSafeInteger(configured) && configured > 0 ? configured : 5000
 }
+/**
+ * Compaction-backup retention thresholds, also read per call so a host can tune
+ * them without a rebuild. The newest backup is always kept regardless of both.
+ */
+function compactBackupRetainDays(): number {
+  const configured = Number(process.env.DSH_BUTLER_COMPACT_BACKUP_DAYS)
+  return Number.isSafeInteger(configured) && configured > 0 ? configured : COMPACT_BACKUP_RETAIN_DAYS
+}
+function compactBackupMaxTotalBytes(): number {
+  const configured = Number(process.env.DSH_BUTLER_COMPACT_BACKUP_MAX_BYTES)
+  return Number.isSafeInteger(configured) && configured > 0 ? configured : COMPACT_BACKUP_MAX_TOTAL_BYTES
+}
 /** Journals above this size are not copied before compaction; the host must back up state. */
 const COMPACT_BACKUP_LIMIT_BYTES = 64 * 1024 * 1024
-const COMPACT_BACKUP_KEEP = 2
+/** A non-newest compaction backup older than this many days is removed. */
+const COMPACT_BACKUP_RETAIN_DAYS = 7
+/** Retained compaction backups are also trimmed when their total exceeds this. */
+const COMPACT_BACKUP_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+/** The newest backup is the downgrade path; it is never touched by retention. */
+const COMPACT_BACKUP_KEEP_NEWEST = 1
 const hashAt = (path: string): string | null => {
   const bytes = bytesAt(path)
   return bytes === undefined ? null : sha256(bytes)
@@ -631,14 +648,137 @@ function compactedJournalContent(journal: Journal): { content: string; kept: Arr
   return { content: lines.length === 0 ? '' : `${lines.join('\n')}\n`, kept, dropped: journal.prepared.size - kept.length }
 }
 
-/** Keep at most COMPACT_BACKUP_KEEP pre-compaction copies; the metadata record stays. */
-function pruneCompactionBackups(directory: string): void {
+/** Retention knobs; every value can be overridden for tests and for operators. */
+export interface CompactionBackupRetentionOptions {
+  /** Days a non-newest backup may stay; defaults to the configured policy. */
+  days?: number
+  /** Maximum total bytes of the retained backups; defaults to the configured policy. */
+  maxBytes?: number
+  /** Retention instant, injectable for tests. */
+  now?: number
+  /** Number of newest backups never touched; defaults to one. */
+  keepNewest?: number
+}
+
+/** What one retention pass observed and did. Reported honestly, including failures. */
+export interface CompactionBackupRetentionResult {
+  directory: string
+  /** True when at least one backup was actually removed. */
+  applied: boolean
+  reason?: 'age' | 'total-bytes' | 'age+total-bytes'
+  policy: { keepNewest: number; days: number; maxBytes: number }
+  kept: string[]
+  deleted: string[]
+  failed: Array<{ name: string; error: string }>
+  bytesBefore: number
+  bytesAfter: number
+  /** Audit record with the plan, written before the first deletion. */
+  auditPath?: string
+}
+
+/** One pre-compaction backup as retention needs to see it, oldest first. */
+interface CompactionBackupFile {
+  name: string
+  path: string
+  bytes: number
+  mtimeMs: number
+}
+
+function compactionBackupFiles(directory: string): CompactionBackupFile[] {
+  let names: string[]
+  try { names = readdirSync(directory) } catch { return [] }
+  const files: CompactionBackupFile[] = []
+  for (const name of names) {
+    if (!name.startsWith('backup-')) continue
+    const path = resolve(directory, name)
+    try {
+      const info = statSync(path)
+      if (!info.isFile()) continue
+      files.push({ name, path, bytes: info.size, mtimeMs: info.mtimeMs })
+    } catch { /* a vanished candidate is simply gone; retention stays idempotent */ }
+  }
+  // The name starts with the journal SHA, not the instant (`backup-<sha16>-<timestamp>`),
+  // so name order is not generation order and must never pick the "newest".
+  // mtime is the observed generation order; the name only breaks an exact tie.
+  return files.sort((left, right) => left.mtimeMs - right.mtimeMs || left.name.localeCompare(right.name))
+}
+
+/**
+ * Apply the compaction-backup retention policy to one directory.
+ *
+ * The newest backup is always retained: it is the pre-compaction generation a
+ * downgrade would restore. Every other backup is removed once it is older than
+ * `days`, and the oldest remaining ones are then removed until the total is
+ * under `maxBytes` - so a single oversized legacy backup cannot pin 100MB
+ * forever. Each pass records its plan in `retention-audit.jsonl` before deleting;
+ * audit and deletion failures are best-effort and never affect journal
+ * compaction. Calling it again after a pass is a no-op.
+ */
+export function retainCompactionBackups(
+  directory: string = statePath('store-compactions'),
+  options: CompactionBackupRetentionOptions = {},
+): CompactionBackupRetentionResult {
+  const now = options.now ?? Date.now()
+  const policy = {
+    keepNewest: Math.max(1, Math.floor(options.keepNewest ?? COMPACT_BACKUP_KEEP_NEWEST)),
+    days: options.days ?? compactBackupRetainDays(),
+    maxBytes: options.maxBytes ?? compactBackupMaxTotalBytes(),
+  }
+  const result: CompactionBackupRetentionResult = {
+    directory: resolve(directory), applied: false, policy, kept: [], deleted: [], failed: [], bytesBefore: 0, bytesAfter: 0,
+  }
+  const files = compactionBackupFiles(directory)
+  if (files.length === 0) return result
+  result.bytesBefore = files.reduce((total, file) => total + file.bytes, 0)
+  // Nothing deleted is a real, reportable outcome: the total is unchanged.
+  result.bytesAfter = result.bytesBefore
+  const protectedNames = new Set(files.slice(Math.max(0, files.length - policy.keepNewest)).map(file => file.name))
+  result.kept = [...protectedNames]
+  const deleting = new Map<string, { file: CompactionBackupFile; reason: 'older-than-days' | 'over-max-bytes' }>()
+  const ageLimitMs = policy.days * 24 * 60 * 60 * 1000
+  let retainedBytes = result.bytesBefore
+  for (const file of files) {
+    if (protectedNames.has(file.name) || now - file.mtimeMs <= ageLimitMs) continue
+    deleting.set(file.name, { file, reason: 'older-than-days' })
+    retainedBytes -= file.bytes
+  }
+  for (const file of files) {
+    if (retainedBytes <= policy.maxBytes) break
+    if (protectedNames.has(file.name) || deleting.has(file.name)) continue
+    deleting.set(file.name, { file, reason: 'over-max-bytes' })
+    retainedBytes -= file.bytes
+  }
+  if (deleting.size === 0) return result
+  const reasons = new Set([...deleting.values()].map(entry => entry.reason))
+  result.reason = reasons.size > 1 ? 'age+total-bytes' : reasons.has('older-than-days') ? 'age' : 'total-bytes'
+  result.bytesAfter = result.bytesBefore - [...deleting.values()].reduce((total, entry) => total + entry.file.bytes, 0)
+  const auditPath = resolve(directory, 'retention-audit.jsonl')
   try {
-    const backups = readdirSync(directory).filter(name => name.startsWith('backup-')).sort()
-    for (const name of backups.slice(0, Math.max(0, backups.length - COMPACT_BACKUP_KEEP))) {
-      try { unlinkSync(resolve(directory, name)) } catch { /* best-effort retention */ }
+    mkdirSync(directory, { recursive: true })
+    appendFileSync(auditPath, `${JSON.stringify({
+      version: 1, kind: 'compaction-backup-retention', at: new Date(now).toISOString(),
+      policy, bytesBefore: result.bytesBefore, bytesAfter: result.bytesAfter, kept: result.kept,
+      deleting: [...deleting.values()].map(entry => ({ name: entry.file.name, bytes: entry.file.bytes, reason: entry.reason })),
+    })}\n`, { encoding: 'utf8', flush: true })
+    result.auditPath = auditPath
+  } catch { /* the audit is best-effort; deleting an agreed plan still proceeds */ }
+  for (const { file } of deleting.values()) {
+    try {
+      unlinkSync(file.path)
+      result.deleted.push(file.name)
+    } catch (error) {
+      result.failed.push({ name: file.name, error: error instanceof Error ? error.message : String(error) })
     }
-  } catch { /* retention must not fail compaction */ }
+  }
+  result.applied = result.deleted.length > 0
+  if (result.failed.length > 0) {
+    try {
+      appendFileSync(auditPath, `${JSON.stringify({
+        version: 1, kind: 'compaction-backup-retention-failure', at: new Date(now).toISOString(), failed: result.failed,
+      })}\n`, { encoding: 'utf8', flush: true })
+    } catch { /* still best-effort */ }
+  }
+  return result
 }
 
 /** Called only under the physical journal lock. Rewrites committed history as checkpoints. */
@@ -660,8 +800,10 @@ function compactJournalLocked(journalPath: string): Journal {
   if (bytes.length > 0 && (bytes.length <= COMPACT_BACKUP_LIMIT_BYTES || backups.length === 0)) {
     backupPath = statePath('store-compactions', `backup-${beforeSha256.slice(0, 16)}-${at.replace(/[:.]/g, '')}.jsonl`)
     writeBytes(backupPath, bytes)
-    pruneCompactionBackups(directory)
   }
+  // Retention runs even when no new backup was written: a journal above the
+  // backup limit would otherwise never clear an oversized legacy backup.
+  try { retainCompactionBackups(directory) } catch { /* retention must not fail compaction */ }
   writeBytes(journalPath, after)
   // The cache must mirror exactly the retained checkpoints, never the dropped tail.
   const prepared = new Map<string, OperationSummary>(kept), committed = new Set<string>(kept.map(([operationId]) => operationId))

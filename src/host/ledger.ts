@@ -22,6 +22,7 @@ import { dirname } from 'node:path'
 import { estimateSpend, isPriced, isPricedModel, priceBasis } from './pricing.ts'
 import { appendLine, localDate, readText, statePath, vaultPath, writeText } from './vault.ts'
 import { commitFiles, commitState, readJsonLinesLenient, readJsonLinesStrict, readSnapshot, readState, type OperationMetadata, type ReadOptions } from './store.ts'
+import { maybeRotateUsageLedger, readUsageArchive } from './usage-rotation.ts'
 
 export type { OperationMetadata } from './store.ts'
 
@@ -569,21 +570,45 @@ function indexUsage(index: UsageIndex, row: Usage): void {
   index.calls.set(key, previous ? mergeUsage(previous, row) : row)
 }
 
+/** One usage row as the lenient reader accepts it; shared with the archive reader. */
+const usageRowValid = (value: unknown): boolean => isRecord(value) && isInstant(value.at)
+  && ['inputTokens', 'outputTokens', 'totalTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'eventSeq']
+    .every(key => value[key] === undefined || Number.isSafeInteger(value[key]) && Number(value[key]) >= 0)
+
+/** Archived rows that could not be read; empty when the archive is healthy. */
+let usageArchiveProblems: string[] = []
+
+/**
+ * Explicit diagnostics for the usage archive: a read failure never silently
+ * drops archived calls from the totals, it is reported here.
+ * @returns the last read's problems, verbatim.
+ */
+export function usageArchiveDiagnostics(): string[] {
+  return [...usageArchiveProblems]
+}
+
 function currentUsageIndex(): UsageIndex {
   const path = USAGE_FILE()
-  const { signature, size } = usageSignature(path)
-  if (cachedUsage?.signature === signature) return cachedUsage
+  let observed = usageSignature(path)
+  // Rotation keeps the hot append-only file bounded. It is maintenance, never a
+  // precondition: a failed pass leaves the bytes alone and the read still runs.
+  if (maybeRotateUsageLedger({ path, observedBytes: observed.size })?.applied === true) observed = usageSignature(path)
+  if (cachedUsage?.signature === observed.signature) return cachedUsage
+  // Archived years stay part of the ledger: totals and per-session attribution
+  // are computed over hot + archive rows exactly as they were before rotation.
+  // Archive damage is surfaced through usageArchiveDiagnostics(), never hidden.
+  const archived = readUsageArchive<Usage>(usageRowValid)
+  usageArchiveProblems = archived.problems
   // Keep the store's lenient parser so damaged rows remain visible in storage
   // diagnostics. External edits/replacements invalidate this projection.
-  const rows = readJsonLinesLenient<Usage>(path, value => isRecord(value) && isInstant(value.at)
-    && ['inputTokens', 'outputTokens', 'totalTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'eventSeq'].every(key => value[key] === undefined || Number.isSafeInteger(value[key]) && Number(value[key]) >= 0))
-  const index: UsageIndex = { signature, calls: new Map(), unattributed: 0, needsSeparator: false }
+  const rows = [...archived.rows, ...readJsonLinesLenient<Usage>(path, usageRowValid)]
+  const index: UsageIndex = { signature: observed.signature, calls: new Map(), unattributed: 0, needsSeparator: false }
   for (const row of rows) indexUsage(index, row)
-  if (size > 0) {
+  if (observed.size > 0) {
     const fd = openSync(path, 'r')
     try {
       const tail = Buffer.alloc(1)
-      readSync(fd, tail, 0, 1, size - 1)
+      readSync(fd, tail, 0, 1, observed.size - 1)
       index.needsSeparator = tail[0] !== 0x0a
     } finally { closeSync(fd) }
   }

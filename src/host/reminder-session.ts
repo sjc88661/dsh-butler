@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { ScheduleService } from './ctx.ts'
+import { reminderTargetSession, scheduleDelete, type ReminderDeleteReceipt } from './remind.ts'
 import { REMINDER_SESSION_PREFIX } from './runtime-controls.ts'
 
 interface ReminderAgent {
@@ -124,10 +125,22 @@ export class ReminderSessions {
   }
 }
 
-export async function deleteOwnedReminder(schedule: Pick<ScheduleService, 'catalog' | 'delete'>, sourceSessionId: string, id: string) {
+/**
+ * Delete one reminder only after proving the caller owns its target session.
+ *
+ * DSH 0.2.2 ids are host-wide and `delete` became `edit({ action: 'delete' })`,
+ * so the ownership check has to come from the catalog's `target.sessionId`
+ * before the id alone is handed to the destructive call.
+ */
+export async function deleteOwnedReminder(
+  schedule: Pick<ScheduleService, 'catalog' | 'edit'>,
+  sourceSessionId: string,
+  id: string,
+): Promise<ReminderDeleteReceipt> {
   const matches = (await schedule.catalog()).filter(row => row.id === id)
-  if (matches.length !== 1 || !matches[0]?.sessionId) return { id, deleted: false, code: 'schedule_not_found_or_ambiguous' }
-  const owner = matches[0].sessionId
+  if (matches.length !== 1) return { id, deleted: false, code: 'schedule_not_found_or_ambiguous' }
+  const owner = reminderTargetSession(matches[0]!)
+  if (!owner) return { id, deleted: false, code: 'schedule_not_found_or_ambiguous' }
   if (owner !== sourceSessionId && !owner.startsWith(REMINDER_SESSION_PREFIX)) return { id, deleted: false, code: 'schedule_owner_mismatch' }
-  return schedule.delete({ sessionId: owner, id })
+  return scheduleDelete(schedule, id)
 }

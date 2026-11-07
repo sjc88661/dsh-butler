@@ -47,7 +47,7 @@ import { installTrial, type TrialConfigInput, type TrialContext } from './host/t
 import { installToolLoading } from './host/tool-loading.ts'
 import { installSkillLoading } from './host/skill-loading.ts'
 import { installExecutionContext, type ExecutionContexts } from './host/execution-context.ts'
-import { storageStatus } from './host/store.ts'
+import { retainCompactionBackups, storageStatus } from './host/store.ts'
 import { installBusinessWorkflows, type BusinessWorkflows } from './host/workflow-runtime.ts'
 import { installButlerExtensions, type ButlerExtensionsHostContext } from './host/extensions.ts'
 import { importDshModule } from './host/dsh-modules.ts'
@@ -185,6 +185,23 @@ export function apply(ctx: AppContext, config: Config): void {
   } catch (error) {
     ctx.logger?.warn?.('[dsh-butler] 对外扩展接口初始化失败，能力包/通道注册被跳过（管家其余功能不受影响）：%s', String(error))
   }
+
+  // 2b. Storage maintenance: compaction backups are a downgrade path, not an
+  // archive. The newest generation is kept; older ones age or oversize out, so
+  // a leftover legacy backup cannot pin ~100MB forever. Best-effort: a broken
+  // backup directory has no say in whether the butler activates.
+  ctx.effect(() => {
+    try {
+      const retention = retainCompactionBackups()
+      if (retention.deleted.length > 0) {
+        ctx.logger?.info?.('[dsh-butler] 压缩备份保留策略：删除 %d 个旧备份，释放 %d 字节（%s）',
+          retention.deleted.length, retention.bytesBefore - retention.bytesAfter, retention.reason ?? 'policy')
+      }
+    } catch (error) {
+      ctx.logger?.warn?.('[dsh-butler] 压缩备份保留策略执行失败（不影响管家其它功能）：%s', String(error))
+    }
+    return () => {}
+  }, 'butler: compaction backup retention')
 
   // 3-4. Tools and the panel's read routes.
   //

@@ -28,7 +28,7 @@ async function environment(settings = {}) {
   const ctx = { on(name, fn) { hooks.set(name, fn); return () => { if (hooks.get(name) === fn) hooks.delete(name) } }, tools: {},
     get(name) { if (name === 'butlerReminderDelivery' && liveService && settings.enabled !== false) return service }, logger: { warn() {} } }
   const options = { contexts, timeZone: 'Asia/Shanghai', filePrefix: prefix, destination: async () => target.id,
-    schedule: () => ({ async create() { return { id: `job-${prefix}`, sessionId: target.id } },
+    schedule: () => ({ async create(request) { return { id: `job-${prefix}`, kind: 'at', scheduledAt: '2030-01-02T03:04:00+08:00', target: request.target, status: 'active' } },
       async history(request) {
         historyRequests.push(request)
         return settings.history ? settings.history(request, historyRequests.length) : { records: [{ messageId: 'native-occurrence', deliveredAt: '2030-01-01T19:04:01Z' }] }
@@ -191,7 +191,8 @@ for (const invalid of ['wrong-owner', 'wrong-job', 'wrong-session', 'non-schedul
         const data = JSON.parse(readFileSync(e.operationsFile, 'utf8'))
         const operation = Object.values(data.operations)[0]
         if (invalid === 'changed-target') operation.outboundDestination.chatId = 'different-private-chat'
-        else operation.actualReceipt.sessionId = 'different-native-session'
+        // 0.2.2 receipts name the delivery destination under `target`.
+        else operation.actualReceipt.target = { kind: 'session', sessionId: 'different-native-session' }
         writeFileSync(e.operationsFile, JSON.stringify(data))
       }
       const source = invalid === 'wrong-job' ? { kind: 'schedule', scheduleId: 'another-job' }
@@ -272,7 +273,7 @@ test('native history is checked against the exact job and can settle after the t
   await e.begin(); await e.assistant(); await e.finish()
   assert.equal(e.sent.length, 1)
   assert.equal(e.historyRequests.length, 2)
-  assert.deepEqual(e.historyRequests[0], { sessionId: e.target.id, id: e.created.reminder.id, limit: 100 })
+  assert.deepEqual(e.historyRequests[0], { id: e.created.reminder.id, limit: 100 })
   e.stop()
 })
 

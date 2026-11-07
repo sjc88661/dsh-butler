@@ -23,8 +23,21 @@ function environment(options = {}) {
   const registered = new Map()
   let creates = 0
   const schedules = [], scheduleRequests = []
-  const schedule = { async create(sessionId, request) { creates++; scheduleRequests.push(structuredClone(request)); const row = { id: `schedule-${crypto.randomUUID()}`, sessionId, scheduledAt: '2026-10-16T10:00:00+08:00' }; schedules.push(row); return row },
-    async catalog() { return schedules }, async history() { return { records: [{ messageId: 'delivered-real' }] } }, async delete({ id }) { return { id, deleted: true } } }
+  const schedule = {
+    // 0.2.2: create(request, actorSessionId?) returns one catalog entry with a `target`.
+    async create(request, actorSessionId) {
+      creates++
+      scheduleRequests.push(structuredClone(request))
+      const row = { id: `schedule-${crypto.randomUUID()}`, kind: request.timing.kind, title: request.title, prompt: request.prompt,
+        scheduledAt: '2026-10-16T10:00:00+08:00', target: request.target, status: 'active' }
+      schedules.push(row)
+      return row
+    },
+    async catalog() { return schedules },
+    async history() { return { records: [{ messageId: 'delivered-real' }] } },
+    // 0.2.2: cancellation is edit({ id, action: 'delete' }).
+    async edit(request) { return { id: request.id, deleted: true } },
+  }
   const reminderOperations = new ReminderOperations({ file: join(home, 'state', `reminders-${crypto.randomUUID()}.json`), schedule: () => schedule,
     destination: async () => `session-butler-reminder-${crypto.randomUUID()}`, ...options.reminderOptions })
   registerButlerTools({ tools: { register(tool) { registered.set(tool.name, tool); return () => {} } } }, {
@@ -103,7 +116,7 @@ test('the reminder tool parses only explicit numeric relative seconds, minutes a
     const args = { action: 'create', title: 'Relative reminder', when }
     const first = await e.call('butler_remind', args, 'relative-call')
     assert.equal(first.ok, true, JSON.stringify(first))
-    assert.equal(e.scheduleRequests[0].at, expected)
+    assert.equal(e.scheduleRequests[0].timing.at, expected)
     clock = '2026-10-21T05:00:00.000Z'
     const replay = await e.call('butler_remind', args, 'relative-call')
     assert.equal(replay.reminder.id, first.reminder.id)

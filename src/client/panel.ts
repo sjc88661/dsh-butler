@@ -52,8 +52,8 @@ import {
 import { decisionsZone, receiptRow, resourcesZone, systemZone, todayZone } from './workbench/zones.ts'
 import { workbenchStatusBar } from './workbench/status-bar.ts'
 
-/** Poll cadence while the seat is mounted. */
-const POLL_MS = 15000
+/** Poll cadence while the seat is mounted (visible only; see the poll effect). */
+const POLL_MS = 60000
 
 /**
  * The full workbench page.

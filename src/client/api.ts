@@ -158,19 +158,34 @@ export type NoteResult =
   | { kind: 'note'; slug: string; path: string; text: string }
   | { kind: 'error'; message: string }
 
+/** Last payload per path, so a 304 answer reuses the exact same reference. */
+const readCache = new Map<string, { etag: string; value: unknown }>()
+
 /**
- * Fetch JSON from the butler read API.
+ * Fetch JSON from the butler read API, revalidating with its ETag.
  * @param path - absolute path under {@link API_PREFIX}.
  * @param signal - abort signal for the caller's lifetime.
- * @returns the decoded payload.
+ * @returns the decoded payload; the previous value when the host answers 304.
  */
 async function getJson(path: string, signal?: AbortSignal): Promise<unknown> {
-  const response = await fetch(path, { signal, headers: { accept: 'application/json' } })
+  const cached = readCache.get(path)
+  const headers: Record<string, string> = { accept: 'application/json' }
+  if (cached !== undefined) headers['if-none-match'] = cached.etag
+  const response = await fetch(path, { signal, headers })
+  if (response.status === 304 && cached !== undefined) return cached.value
   if (!response.ok) {
     const detail = await response.json().catch(() => undefined) as { error?: unknown } | undefined
     throw new Error(`HTTP ${response.status} ${response.statusText}${typeof detail?.error === 'string' ? `：${detail.error}` : ''}`)
   }
-  return await response.json()
+  const value = await response.json()
+  try {
+    const etag = response.headers?.get?.('etag')
+    if (typeof etag === 'string' && etag !== '') readCache.set(path, { etag, value })
+    else readCache.delete(path)
+  } catch {
+    // Header access is optional (test doubles and old shells omit it).
+  }
+  return value
 }
 
 /**

@@ -26,7 +26,7 @@ function member(path, expectedSha256) {
   return bytes.toString('utf8')
 }
 const nativeSources = new Map([
-  ['@deepseek-ai/cordis', member('dsh/node_modules/@deepseek-ai/cordis/lib/index.js', '6a9394c0877ff45218818c6e815edd038f8057e1a1deb390a8d43ec81c57691e')],
+  ['@deepseek-ai/cordis', member('dsh/node_modules/@deepseek-ai/cordis/lib/index.js', '627409afa06a265f7253200d3bc4648e88805c39fd3768568eb9b9518a31fe8f')],
   ['@deepseek-ai/cosmokit', member('dsh/node_modules/@deepseek-ai/cosmokit/lib/index.js', 'ba44c0871656e4c7cac2c3c8a2ff644e0d2eb9d6bda7f6355866d686d513268e')],
 ])
 const react = { createElement: (type, props, ...children) => ({ type, props, children }),

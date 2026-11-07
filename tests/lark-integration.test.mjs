@@ -262,7 +262,7 @@ test('the real channel conversion flows through native user lookup into Reminder
   await e.emit('message', source)
   contexts.bindUser(agent, input); contexts.captureRequest(agent, 1, 1)
   const workflows = installBusinessWorkflows(e.harness.ctx, { contexts, timeZone: 'Asia/Shanghai', filePrefix: randomUUID(), destination: async () => target.id,
-    schedule: () => ({ async create() { return { id: 'native-mobile-schedule', sessionId: target.id } }, async history() { return { records: [{ messageId: 'native-mobile-occurrence' }] } } }) })
+    schedule: () => ({ async create(request) { return { id: 'native-mobile-schedule', kind: 'at', scheduledAt: '2030-01-02T03:04:00+08:00', target: request.target, status: 'active' } }, async history() { return { records: [{ messageId: 'native-mobile-occurrence' }] } } }) })
   const result = await contexts.withExecution({ agent, callId: 'native-remind', name: 'butler_remind' }, () => workflows.reminderOperations.create({ identity: contexts.current(),
     reminder: { title: '手机提醒', prompt: 'complete native reminder', at: '2030-01-02T03:04', timeZone: 'Asia/Shanghai', originalText: 'model text cannot replace input' } }))
   assert.equal(result.ok, true)

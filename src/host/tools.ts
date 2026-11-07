@@ -54,7 +54,8 @@ import { exportLiterature } from './literature-export.ts'
 import { LiteratureResults, renderLiteratureResult, type LiteratureScope } from './literature-results.ts'
 import { getPack, listPacks, matchPacks, packsSummary, scaffoldPack, setPackEnabled } from './packs.ts'
 import { PACK_BOUNDARY_DESCRIPTION } from '../shared/packs.ts'
-import type { ScheduleService, WebService } from './ctx.ts'
+import type { ScheduleService, ScheduleTiming, WebService } from './ctx.ts'
+import { projectReminderCatalog } from './remind.ts'
 import {
   PROFILE_FILE,
   VAULT_HOME,
@@ -659,6 +660,10 @@ export function registerButlerTools(
       prompt: { type: 'string', description: '到点要说的内容。' },
       when: { type: 'string', description: '用户原话里的时间描述；支持明确数字相对时间，例如"从现在起60秒后"、"2分钟后"、"1小时后"。' },
       at: { type: 'string', description: '已确认的具体时间，ISO 或 YYYY-MM-DDTHH:mm。给了就按这个建。' },
+      timing: {
+        type: 'object',
+        description: 'P1 预留的结构化重复规则（0.2.2 timing 联合）：{kind:"at",at}、{kind:"after",after_seconds}、{kind:"daily",daily:{time,time_zone}}、{kind:"weekly",weekly:{time,time_zone,weekdays}}、{kind:"every",every_seconds}、{kind:"cron"|"rrule"}。与 at/when 不能同时提供；自然语言→timing 的解析下一步再做。',
+      },
       id: { type: 'string', description: 'cancel 时的提醒 id。' },
       originalText: { type: 'string', description: '用户原话，用于判断时间是否含糊。' },
     },
@@ -690,8 +695,10 @@ export function registerButlerTools(
         }
 
         if (action === 'list') {
+          // Host-side projection: native 0.2.2 status is normalized for the
+          // existing 'active'|'inactive' consumer type, raw status preserved.
           const rows = await (schedule as ScheduleService).catalog()
-          return { ok: true, reminders: rows }
+          return { ok: true, reminders: projectReminderCatalog(rows) }
         }
         if (action === 'history') {
           if (!deps.reminderOperations) return { ok: false, available: false, reason: '提醒业务记录服务不可用；无法核对真实历史。' }
@@ -708,13 +715,21 @@ export function registerButlerTools(
         const title = String(args['title'] ?? '').trim()
         if (title === '') throw new GuardRefusal('remind.no_title', '提醒必须给标题。')
         const at = typeof args['at'] === 'string' && args['at'].trim() !== '' ? args['at'].trim() : undefined
-        const relative = at === undefined && typeof args['when'] === 'string'
-          ? /^(?:从现在起|从现在开始|现在起)?\s*(\d+(?:\.\d+)?)\s*(秒钟?|分钟?|小时)\s*(?:之|以)?后$/.exec(args['when'].trim()) : null
+        // P1 hook: a validated 0.2.2 timing object may be passed through as-is.
+        // Natural language → timing parsing is deliberately not done here yet.
+        const timingArg = typeof args['timing'] === 'object' && args['timing'] !== null && !Array.isArray(args['timing'])
+          ? args['timing'] as ScheduleTiming : undefined
+        const heardWhen = typeof args['when'] === 'string' && args['when'].trim() !== '' ? args['when'].trim() : undefined
+        if (timingArg !== undefined && (at !== undefined || heardWhen !== undefined)) {
+          throw new GuardRefusal('remind.conflicting_time', '结构化 timing 与 at/when 只能提供一种，提醒未建立。')
+        }
+        const relative = timingArg === undefined && at === undefined && heardWhen !== undefined
+          ? /^(?:从现在起|从现在开始|现在起)?\s*(\d+(?:\.\d+)?)\s*(秒钟?|分钟?|小时)\s*(?:之|以)?后$/.exec(heardWhen) : null
         const afterSeconds = relative ? Number(relative[1]) * (relative[2]!.startsWith('秒') ? 1 : relative[2]!.startsWith('分') ? 60 : 3600) : undefined
         if (afterSeconds !== undefined && (afterSeconds <= 0 || !Number.isSafeInteger(afterSeconds * 1000))) {
           throw new GuardRefusal('remind.invalid_time', '相对提醒时间必须是有效的正数秒数、分钟数或小时数。')
         }
-        const vague = afterSeconds !== undefined ? undefined : clarifyTime(String(args['originalText'] ?? args['when'] ?? title), at)
+        const vague = timingArg !== undefined || afterSeconds !== undefined ? undefined : clarifyTime(String(args['originalText'] ?? args['when'] ?? title), at)
           ?? (at === undefined ? '什么时候提醒你？请给出具体日期时间，或明确的数字秒、分钟、小时后。' : undefined)
         if (vague !== undefined) {
           return {
@@ -729,7 +744,7 @@ export function registerButlerTools(
         const identity = deps.executionContext?.current()
         if (!identity || !deps.reminderOperations) throw new GuardRefusal('remind.operations_unavailable', '提醒操作记录服务不可用，提醒未建立。')
         const outcome = await deps.reminderOperations.create({ identity, reminder: { title, prompt: String(args['prompt'] ?? title),
-          ...(afterSeconds === undefined ? { at } : { afterSeconds }), timeZone: deps.timeZone } })
+          ...(timingArg !== undefined ? { timing: timingArg } : afterSeconds === undefined ? { at } : { afterSeconds }), timeZone: deps.timeZone } })
         let persistedTask = outcome.task
         if (!persistedTask && outcome.taskId) {
           try { persistedTask = getTask(outcome.taskId) } catch { /* Preserve the original create/storage failure. */ }

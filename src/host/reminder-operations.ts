@@ -3,10 +3,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { isDeepStrictEqual } from 'node:util'
-import type { ScheduleDeliveryReceipt, ScheduleRecord, ScheduleService } from './ctx.ts'
+import type { ScheduleDeliveryReceipt, ScheduleRecord, ScheduleService, ScheduleTiming } from './ctx.ts'
 import { executionKey, type ExecutionIdentity, type OriginUser } from './execution-context.ts'
 import { getTask, setTaskStatus, upsertTask, type Task } from './ledger.ts'
-import { scheduleCreate, type ConcreteReminder } from './remind.ts'
+import {
+  concreteTime, reminderDeliveryReceipt, reminderHistoryLimits, reminderTargetSession,
+  scheduleCreate, validTiming, validTimeZone, type ConcreteReminder,
+} from './remind.ts'
 import { deleteOwnedReminder } from './reminder-session.ts'
 import { REMINDER_SESSION_PREFIX } from './runtime-controls.ts'
 import { commitState, readState, type OperationMetadata } from './store.ts'
@@ -16,7 +19,12 @@ export type ReminderCreationState = 'creating' | 'committed' | 'uncertain'
 export type ReminderDeliveryState = 'scheduled' | 'delivered' | 'assistant-completed' | 'unknown'
 type DeleteReceipt = { id: string; deleted: boolean; code?: string }
 /** Relative inputs are normalized once inside the complete native execution identity. */
-export type ReminderCreateRequest = Omit<ConcreteReminder, 'at'> & { at?: string; afterSeconds?: number }
+export type ReminderCreateRequest = Omit<ConcreteReminder, 'at' | 'timing'> & {
+  at?: string
+  afterSeconds?: number
+  /** 0.2.2 tagged timing (one-shot or recurring); exclusive with `at`/`afterSeconds`. */
+  timing?: ScheduleTiming
+}
 
 export interface ReminderTaskLink {
   executionKey: string
@@ -41,6 +49,9 @@ export interface ReminderOperation {
   taskId?: string
   destinationSessionId?: string
   scheduleId?: string
+  /** Native 0.2.2 rule kind/status, kept verbatim beside the local operation state. */
+  scheduleKind?: string
+  scheduleStatus?: string
   confirmedAt?: string
   timeZone: string
   request?: ConcreteReminder
@@ -66,7 +77,15 @@ export interface ReminderResult {
   operation: ReminderOperation
   taskId?: string
   task?: Task
-  reminder?: { id: string; sessionId: string; scheduledAt?: string; raw: ScheduleRecord }
+  reminder?: {
+    id: string
+    sessionId: string
+    scheduledAt?: string
+    /** Native kind/status of the created rule, verbatim (extra info, not normalized). */
+    kind?: string
+    status?: string
+    raw: ScheduleRecord
+  }
   cancelled?: string | null
   code?: string
   reason?: string
@@ -81,7 +100,13 @@ export interface ReminderHistoryResult {
   sessionId?: string
   taskId?: string
   records?: ScheduleDeliveryReceipt[]
+  /** 0.2.2 page limits: older records exist but were not read/pruned. */
+  earlierRecordsUnavailable?: boolean
+  earlierRecordsPruned?: boolean
+  retention?: { days?: number; records?: number }
+  nextBefore?: string
   reason?: string
+  code?: string
 }
 
 export interface ReminderOperationsOptions {
@@ -121,16 +146,32 @@ const instant = (value: unknown): value is string => text(value) && Number.isFin
 const nativeDelivered = (receipt: ScheduleDeliveryReceipt): boolean => text(receipt.messageId) || instant(receipt.deliveredAt)
 const emptyFile = (): OperationFile => ({ version: 1, operations: {} })
 const deliveryReceipt = (value: unknown): value is ScheduleDeliveryReceipt => record(value)
-  && ['scheduledAt', 'deliveredAt', 'messageId'].every(key => value[key] === undefined || typeof value[key] === 'string')
+  && ['scheduledAt', 'deliveredAt', 'messageId', 'targetSessionId', 'prompt'].every(key => value[key] === undefined || typeof value[key] === 'string')
 
-function concreteTime(value: unknown): value is string {
-  if (!text(value)) return false
-  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?$/.exec(value)
-  if (!match || !Number.isFinite(Date.parse(value))) return false
-  const [, year, month, day, hour, minute, second] = match
-  const days = new Date(Date.UTC(Number(year), Number(month), 0)).getUTCDate()
-  return Number(month) >= 1 && Number(month) <= 12 && Number(day) >= 1 && Number(day) <= days
-    && Number(hour) <= 23 && Number(minute) <= 59 && (second === undefined || Number(second) <= 59)
+function validStoredRequest(request: unknown): boolean {
+  if (!record(request)) return false
+  return text(request['timeZone']) && (text(request['at']) || validTiming(request['timing']))
+}
+
+/**
+ * Best host-side instant for a tagged timing, when it is knowable before the
+ * scheduler answers. `at`/`after`/`every` are deterministic from the request
+ * clock; `daily`/`weekly`/`cron`/`rrule` first occurrences are left to the
+ * create receipt (`raw.scheduledAt`) instead of guessed here.
+ */
+function timingInstant(timing: ScheduleTiming, now: string): string | undefined {
+  const base = Date.parse(now)
+  const shifted = (seconds: number): string | undefined => {
+    if (!Number.isFinite(base)) return undefined
+    const at = new Date(base + seconds * 1000)
+    return Number.isFinite(at.getTime()) ? at.toISOString() : undefined
+  }
+  switch (timing.kind) {
+    case 'at': return typeof timing.at === 'string' ? timing.at : undefined
+    case 'after': return shifted(timing.after_seconds)
+    case 'every': return shifted(timing.every_seconds)
+    default: return undefined
+  }
 }
 
 function validFile(value: unknown): boolean {
@@ -145,8 +186,8 @@ function validFile(value: unknown): boolean {
     && (row.destinationSessionId === undefined || (text(row.destinationSessionId)
       && (row.action === 'cancel' || row.destinationSessionId.startsWith(REMINDER_SESSION_PREFIX))))
     && (row.scheduleId === undefined || text(row.scheduleId))
-    && (row.action !== 'create' || (text(row.taskId) && record(row.request) && text(row.confirmedAt)
-      && ['title', 'prompt', 'at', 'timeZone'].every(field => text((row.request as Record<string, unknown>)[field]))))
+    && (row.action !== 'create' || (text(row.taskId) && text(row.confirmedAt) && validStoredRequest(row.request)
+      && (text((row.request as Record<string, unknown>)['title']) && text((row.request as Record<string, unknown>)['prompt']))))
     && (row.actualReceipt === undefined || (record(row.actualReceipt) && text(row.actualReceipt.id)
       && (row.action !== 'cancel' || typeof row.actualReceipt.deleted === 'boolean')))
     && (row.refusal === undefined || (row.action === 'cancel' && record(row.refusal) && text(row.refusal.code) && text(row.refusal.reason)))
@@ -154,6 +195,8 @@ function validFile(value: unknown): boolean {
       && (row.action === 'cancel' || (text(row.destinationSessionId) && text(row.scheduleId)
         && record(row.task) && row.task.id === row.taskId))))
     && (row.lastDelivery === undefined || deliveryReceipt(row.lastDelivery))
+    && (row.scheduleKind === undefined || text(row.scheduleKind))
+    && (row.scheduleStatus === undefined || text(row.scheduleStatus))
     && (row.outboundDestination === undefined || (validReminderDestination(row.outboundDestination)
       && row.outboundDestination.ownerId === row.identity.ownerId)))
 }
@@ -248,7 +291,10 @@ export class ReminderOperations {
     if (operation.action === 'create' && operation.scheduleId && operation.destinationSessionId && operation.actualReceipt) {
       const receipt = operation.actualReceipt as ScheduleRecord
       out.reminder = { id: operation.scheduleId, sessionId: operation.destinationSessionId,
-        ...(receipt.scheduledAt === undefined ? {} : { scheduledAt: receipt.scheduledAt }), raw: structuredClone(receipt) }
+        ...(receipt.scheduledAt === undefined ? {} : { scheduledAt: receipt.scheduledAt }),
+        ...(operation.scheduleKind === undefined ? {} : { kind: operation.scheduleKind }),
+        ...(operation.scheduleStatus === undefined ? {} : { status: operation.scheduleStatus }),
+        raw: structuredClone(receipt) }
     }
     if (operation.action === 'cancel') {
       const receipt = operation.actualReceipt as DeleteReceipt | undefined
@@ -278,15 +324,19 @@ export class ReminderOperations {
   async create(input: { identity: ExecutionIdentity; reminder: ReminderCreateRequest }): Promise<ReminderResult> {
     const key = this.key(input.identity), request = structuredClone(input.reminder)
     const relative = request.afterSeconds !== undefined
+    const tagged = request.timing !== undefined
     if (!text(request.title) || !text(request.prompt) || !text(request.timeZone)) throw new Error('提醒标题、正文和时区不能为空')
-    if (relative ? request.at !== undefined || typeof request.afterSeconds !== 'number' || request.afterSeconds <= 0
-      || !Number.isSafeInteger(request.afterSeconds * 1000) : !concreteTime(request.at)) {
-      throw new Error('提醒时间无效：需要具体 at，或正数 afterSeconds 秒数，不能同时提供')
+    if (tagged
+      ? request.at !== undefined || request.afterSeconds !== undefined || !validTiming(request.timing)
+      : relative ? request.at !== undefined || typeof request.afterSeconds !== 'number' || request.afterSeconds <= 0
+        || !Number.isSafeInteger(request.afterSeconds * 1000) : !concreteTime(request.at)) {
+      throw new Error('提醒时间无效：需要具体 at、正数 afterSeconds 或有效 timing，且只能提供一种')
     }
-    try { new Intl.DateTimeFormat('en-US', { timeZone: request.timeZone }) } catch { throw new Error('提醒时间的时区无效') }
+    if (!validTimeZone(request.timeZone)) throw new Error('提醒时间的时区无效')
     // Preserve legacy absolute digests; relative replays compare their original duration, never a moving clock.
+    // A tagged timing digest is the rule itself, so a repeat never moves either.
     const digest = hash(JSON.stringify(['create', input.identity.sessionId, request.title, request.prompt,
-      relative ? { afterSeconds: request.afterSeconds } : request.at, request.timeZone]))
+      tagged ? { timing: request.timing } : relative ? { afterSeconds: request.afterSeconds } : request.at, request.timeZone]))
     return this.shared(key, digest, async () => {
       let operation = this.existing(key, digest)
       if (operation?.state === 'committed') return this.result(operation)
@@ -297,14 +347,12 @@ export class ReminderOperations {
       }
       if (operation !== undefined) return this.reconcileCreate(operation, schedule)
       const now = this.now()
-      const at = relative ? new Date(Date.parse(now) + request.afterSeconds! * 1000) : undefined
-      if (at && !Number.isFinite(at.getTime())) throw new Error('相对提醒时间超出有效范围')
-      const reminder: ConcreteReminder = { title: request.title, prompt: request.prompt, timeZone: request.timeZone,
-        at: at === undefined ? request.at! : at.toISOString() }
+      const { reminder, predictedAt } = this.concreteReminder(request, now)
       operation = {
         action: 'create', executionKey: key, identity: structuredClone(input.identity), requestDigest: digest,
         state: 'creating', sourceSessionId: input.identity.sessionId!, taskId: `task-reminder-${hash(key).slice(0, 32)}`,
-        confirmedAt: reminder.at, timeZone: reminder.timeZone, request: reminder, createdAt: now, updatedAt: now, deliveryState: 'unknown',
+        confirmedAt: predictedAt ?? now, timeZone: reminder.timeZone, request: reminder,
+        createdAt: now, updatedAt: now, deliveryState: 'unknown',
       }
       try {
         operation = this.save(operation)
@@ -330,13 +378,45 @@ export class ReminderOperations {
         const destination = await this.options.destination(operation.sourceSessionId, reminder.title, key)
         if (!destination.startsWith(REMINDER_SESSION_PREFIX)) throw new Error('提醒目标不是独立提醒会话，拒绝建立规则')
         operation = this.save({ ...operation, destinationSessionId: destination })
-        const receipt = await scheduleCreate(schedule, destination, reminder)
+        // 0.2.2: request first, then the acting butler session; the isolated reminder session is the target.
+        const receipt = await scheduleCreate(schedule, operation.sourceSessionId, destination, reminder)
         if (!text(receipt.id)) throw new Error('调度服务未返回可信规则 ID')
-        operation = { ...operation, scheduleId: receipt.id, actualReceipt: receipt.raw as ScheduleRecord, deliveryState: 'scheduled' }
+        const raw = receipt.raw
+        operation = { ...operation, scheduleId: receipt.id, actualReceipt: raw as ScheduleRecord, deliveryState: 'scheduled',
+          ...(receipt.kind === undefined ? {} : { scheduleKind: receipt.kind }),
+          ...(receipt.status === undefined ? {} : { scheduleStatus: receipt.status }),
+          // A recurring rule's first occurrence is only known once the scheduler stored it.
+          ...(reminder.at === undefined && raw.scheduledAt !== undefined ? { confirmedAt: raw.scheduledAt } : {}) }
         operation = this.save(operation)
         return this.commitCreate(operation)
       } catch (error) { return this.uncertain(operation, error) }
     })
+  }
+
+  /**
+   * Turn a validated request into the concrete reminder the scheduler receives.
+   *
+   * Legacy `at`/`afterSeconds` calls keep the old behaviour: the wall-clock or
+   * relative instant is frozen before the external request, so a replay can
+   * never silently move. An explicit `timing` is forwarded untouched — the
+   * scheduler is the authority on recurrence — and `predictedAt` is only the
+   * best host-side instant for display/ledger bookkeeping (the create receipt
+   * replaces it when the real first occurrence is known).
+   */
+  private concreteReminder(request: ReminderCreateRequest, now: string): { reminder: ConcreteReminder; predictedAt?: string } {
+    const base = { title: request.title, prompt: request.prompt, timeZone: request.timeZone }
+    if (request.timing !== undefined) {
+      const timing = structuredClone(request.timing)
+      const predictedAt = timingInstant(timing, now)
+      return { reminder: { ...base, timing }, ...(predictedAt === undefined ? {} : { predictedAt }) }
+    }
+    if (request.afterSeconds !== undefined) {
+      const at = new Date(Date.parse(now) + request.afterSeconds * 1000)
+      if (!Number.isFinite(at.getTime())) throw new Error('相对提醒时间超出有效范围')
+      const instant = at.toISOString()
+      return { reminder: { ...base, at: instant }, predictedAt: instant }
+    }
+    return { reminder: { ...base, at: request.at! }, predictedAt: request.at }
   }
 
   private async reconcileCreate(operation: ReminderOperation, schedule: ScheduleService): Promise<ReminderResult> {
@@ -346,9 +426,13 @@ export class ReminderOperations {
       if (!operation.scheduleId || !operation.destinationSessionId || !operation.actualReceipt) {
         return this.uncertain(operation, '上次创建缺少实际宿主回执，请核对原生提醒目录')
       }
-      const matches = catalog.filter(row => row.id === operation.scheduleId && row.sessionId === operation.destinationSessionId)
+      const matches = catalog.filter(row => row.id === operation.scheduleId
+        && reminderTargetSession(row) === operation.destinationSessionId)
       if (matches.length !== 1) return this.uncertain(operation, '实际规则 ID/目标会话未能在宿主目录唯一核实')
-      return this.commitCreate(operation)
+      const row = matches[0]!
+      return this.commitCreate({ ...operation,
+        ...(row.kind === undefined ? {} : { scheduleKind: row.kind }),
+        ...(row.status === undefined ? {} : { scheduleStatus: row.status }) })
     } catch (error) { return this.uncertain(operation, error) }
   }
 
@@ -388,21 +472,28 @@ export class ReminderOperations {
         if (owned.length > 1) return this.refuse(operation, 'schedule_not_found_or_ambiguous', '当前来源有多个同 ID 的提醒目标，无法唯一取消。')
         const associated = owned[0]
         const rows = (await schedule.catalog()).filter(row => row.id === input.id)
+        // 0.2.2 carries the delivery destination under `target`, not a flat sessionId.
+        const targets = rows.map(row => ({ row, target: reminderTargetSession(row) }))
         const owner = associated?.destinationSessionId
-          ? rows.filter(row => row.sessionId === associated.destinationSessionId)
-          : rows.filter(row => row.sessionId !== undefined && this.canAccess(operation!.sourceSessionId, input.id, row.sessionId))
-        if (owner.some(row => !row.sessionId || !this.canAccess(operation!.sourceSessionId, input.id, row.sessionId))) {
+          ? targets.filter(entry => entry.target === associated.destinationSessionId)
+          : targets.filter(entry => entry.target !== undefined && this.canAccess(operation!.sourceSessionId, input.id, entry.target))
+        if (owner.some(entry => !entry.target || !this.canAccess(operation!.sourceSessionId, input.id, entry.target))) {
           return this.refuse(operation, 'schedule_owner_mismatch', '提醒归属与来源会话不匹配，未取消提醒。')
         }
         if (owner.length === 0 && rows.length > 0 && associated === undefined) {
           return this.refuse(operation, 'schedule_owner_mismatch', '缺少当前来源对该提醒目标的可信绑定，未取消提醒。')
         }
         if (owner.length > 1) return this.refuse(operation, 'schedule_not_found_or_ambiguous', '提醒目标不唯一，未取消提醒。')
+        const matched = owner[0]
         operation = this.save({ ...operation,
-          ...(owner.length !== 1 || !owner[0]?.sessionId ? {} : { destinationSessionId: owner[0].sessionId }),
+          ...(matched?.target === undefined ? {} : { destinationSessionId: matched.target }),
           ...(associated?.taskId === undefined ? {} : { taskId: associated.taskId }),
+          ...(matched?.row.kind === undefined ? {} : { scheduleKind: matched.row.kind }),
+          ...(matched?.row.status === undefined ? {} : { scheduleStatus: matched.row.status }),
         })
-        const receipt = await deleteOwnedReminder({ catalog: async () => owner, delete: ref => schedule.delete(ref) }, operation.sourceSessionId, input.id)
+        // 0.2.2 cancellation is `edit({ action: 'delete' })`; ids are host-wide.
+        const receipt = await deleteOwnedReminder({ catalog: async () => owner.map(entry => entry.row), edit: request => schedule.edit(request) },
+          operation.sourceSessionId, input.id)
         if (receipt.id !== input.id) throw new Error('调度删除回执与请求规则 ID 不一致')
         operation = { ...operation, actualReceipt: receipt }
         operation = this.save(operation)
@@ -435,7 +526,8 @@ export class ReminderOperations {
 
   async history(input: { sourceSessionId: string; id: string; limit?: number; timeZone?: string }): Promise<ReminderHistoryResult> {
     const schedule = this.options.schedule()
-    const unavailable = (reason: string): ReminderHistoryResult => ({ ok: false, available: false, deliveryState: 'unknown', scheduleId: input.id, reason })
+    const unavailable = (reason: string, code?: string): ReminderHistoryResult => ({ ok: false, available: false, deliveryState: 'unknown', scheduleId: input.id,
+      reason, ...(code === undefined ? {} : { code }) })
     if (!schedule || typeof schedule.history !== 'function') return unavailable('宿主未提供原生 history，送达历史不可用')
     try {
       const owned = this.createsFor(input.id).filter(row => row.sourceSessionId === input.sourceSessionId)
@@ -444,21 +536,27 @@ export class ReminderOperations {
       let destination = known?.destinationSessionId
       if (destination && !this.canAccess(input.sourceSessionId, input.id, destination)) return unavailable('提醒归属与来源会话不匹配')
       if (!destination) {
-        const matches = (await schedule.catalog()).filter(row => row.id === input.id && row.sessionId !== undefined
-          && this.canAccess(input.sourceSessionId, input.id, row.sessionId))
-        if (matches.length !== 1 || !matches[0]?.sessionId) return unavailable('无法唯一确定提醒所属会话，送达历史不可用')
-        const owner = matches[0].sessionId
-        destination = owner
+        const matches = (await schedule.catalog()).filter(row => row.id === input.id
+          && reminderTargetSession(row) !== undefined && this.canAccess(input.sourceSessionId, input.id, reminderTargetSession(row)!))
+        const match = matches.length === 1 ? matches[0] : undefined
+        if (!match) return unavailable('无法唯一确定提醒所属会话，送达历史不可用')
+        destination = reminderTargetSession(match)!
       }
       const limit = Math.max(1, Math.min(100, Number.isSafeInteger(input.limit) ? input.limit! : 20))
-      const response = await schedule.history({ sessionId: destination, id: input.id, limit })
-      if (!Array.isArray(response.records) || !response.records.every(deliveryReceipt)) return unavailable('宿主未返回有效的原生历史记录')
-      const records: ScheduleDeliveryReceipt[] = structuredClone(response.records)
+      // 0.2.2 history is target-based: the id and an explicit page size, no session id.
+      const response = await schedule.history({ id: input.id, limit })
+      if (!('records' in response) || !Array.isArray(response.records)) {
+        const code = 'code' in response && typeof response.code === 'string' ? response.code : undefined
+        return unavailable(code === undefined ? '宿主未返回有效的原生历史记录' : `宿主原生历史查询未命中：${code}`, code)
+      }
+      if (!response.records.every((row: unknown) => deliveryReceipt(row))) return unavailable('宿主未返回有效的原生历史记录')
+      const records: ScheduleDeliveryReceipt[] = response.records.map((row: ScheduleDeliveryReceipt) => reminderDeliveryReceipt(row))
+      const limits = reminderHistoryLimits(response)
       const delivered = records.filter(nativeDelivered).sort((a, b) => (a.deliveredAt ?? '').localeCompare(b.deliveredAt ?? '')).at(-1)
       if (known && delivered) this.recordDelivery(known, delivered)
       const deliveryState: ReminderDeliveryState = delivered ? 'delivered' : records.some(row => instant(row.scheduledAt)) ? 'scheduled' : 'unknown'
       return { ok: true, available: true, deliveryState, scheduleId: input.id, sessionId: destination,
-        ...(known?.taskId === undefined ? {} : { taskId: known.taskId }), records }
+        ...(known?.taskId === undefined ? {} : { taskId: known.taskId }), records, ...limits }
     } catch (error) { return unavailable(error instanceof Error ? error.message : String(error)) }
   }
 
@@ -507,8 +605,10 @@ export class ReminderOperations {
     if (!operation || operation.state !== 'committed' || !operation.scheduleId || !operation.taskId || !operation.outboundDestination
       || operation.actualReceipt?.id !== operation.scheduleId || operation.outboundDestination.ownerId !== operation.identity.ownerId
       || !isDeepStrictEqual(operation.task?.reminder?.outboundDestination, operation.outboundDestination)) return
-    const receipt = operation.actualReceipt as ScheduleRecord & { sessionId?: string }
-    if (receipt.sessionId !== undefined && receipt.sessionId !== sessionId) return
+    const receipt = operation.actualReceipt as ScheduleRecord
+    // 0.2.2 receipts carry the destination under `target`; older files kept `sessionId`.
+    const receiptSession = reminderTargetSession(receipt)
+    if (receiptSession !== undefined && receiptSession !== sessionId) return
     const task = this.ledger.getTask?.(operation.taskId)
     if (!task || task.ownerId !== operation.identity.ownerId || task.status === 'cancelled' || task.status === 'done'
       || task.reminder?.executionKey !== operation.executionKey || task.reminder.scheduleId !== operation.scheduleId
@@ -525,11 +625,12 @@ export class ReminderOperations {
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         const response = await Promise.race([
-          schedule.history({ sessionId: binding.sessionId, id: binding.scheduleId, limit: 100 }),
+          schedule.history({ id: binding.scheduleId, limit: 100 }),
           new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), 500) }),
         ])
-        if (response && Array.isArray(response.records) && response.records.every(deliveryReceipt)
-          && response.records.some(row => row.messageId === occurrenceMessageId)) return true
+        if (response !== undefined && typeof response === 'object' && 'records' in response
+          && Array.isArray(response.records) && response.records.every((row: unknown) => deliveryReceipt(row))
+          && response.records.some((row: ScheduleDeliveryReceipt) => row.messageId === occurrenceMessageId)) return true
       } catch { /* No history receipt can be inferred from an unavailable host. */ }
       finally { if (timer !== undefined) clearTimeout(timer) }
       if (attempt < 2) await delay(50 * (attempt + 1))

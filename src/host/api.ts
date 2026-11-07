@@ -21,11 +21,13 @@
  * @module @dsh-external/dsh-butler/host/api
  */
 import { createHash } from 'node:crypto'
-import type { ButlerContext, ScheduleCatalogEntry, ScheduleService, ScheduleDeliveryReceipt } from './ctx.ts'
+import type { ButlerContext, ButlerReminderSummary, ScheduleCatalogEntry, ScheduleService, ScheduleDeliveryReceipt } from './ctx.ts'
+import { projectReminder } from './remind.ts'
 import type { UsageBackfillState } from './backfill.ts'
 import { getTask, listTasks, receipts, setButlerSessionId, snapshot, usageRecords, usageTotals } from './ledger.ts'
 import { EvidenceStore } from './evidence-store.ts'
 import { storageStatus } from './store.ts'
+import { archivedReminderKeys, archivedTaskIds } from './archive.ts'
 import type { ArtifactSnapshot, HistoryBudget, HistoryItems, HistoryKind, HistoryPage, RuntimeControlsSnapshot, TaskDetail, TaskReadSnapshot, TaskReminderSnapshot, ReminderOperationSnapshot } from '../shared/workbench.ts'
 import type { Task } from './ledger.ts'
 import type { ReminderOperation } from './reminder-operations.ts'
@@ -52,6 +54,8 @@ export type ButlerApiContext = Omit<ButlerContext, 'webServer'> & { webServer: W
 export interface HttpRequestLike {
   method?: string
   url?: string
+  /** Lower-cased header bag as Node's IncomingMessage provides it. */
+  headers?: Record<string, string | string[] | undefined>
   on(event: 'data', listener: (chunk: unknown) => void): unknown
   on(event: 'end', listener: () => void): unknown
   on(event: 'error', listener: (error: unknown) => void): unknown
@@ -124,7 +128,8 @@ interface OverviewPayload {
   ledger?: Omit<ReturnType<typeof snapshot>, 'open' | 'interrupted'> & { open: TaskReadSnapshot[]; interrupted: TaskReadSnapshot[] }
   /** A damaged ledger is unavailable, never an invented empty task list. */
   ledgerError?: string
-  reminders: ScheduleCatalogEntry[]
+  /** Normalized host projection: native `paused`/`ended` read as inactive for the client. */
+  reminders: ButlerReminderSummary[]
   remindersAvailable: boolean
   remindersError?: string
   /** Borrowed services that answered on this request, for honest diagnostics. */
@@ -346,9 +351,11 @@ async function reminderSnapshot(task: NonNullable<ReturnType<typeof getTask>>, d
   if (!deps.schedule?.history) return unavailable('宿主未提供原生送达历史')
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const result = await Promise.race([deps.schedule.history({ sessionId: link.destinationSessionId, id: link.scheduleId, limit: 20 }),
+    // DSH 0.2.2: target-based history, explicit page size, no session id.
+    const result = await Promise.race([deps.schedule.history({ id: link.scheduleId, limit: 20 }),
       new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('原生送达历史查询超时')), 3000); timer.unref?.() })])
-    if (!Array.isArray(result.records) || !result.records.every(row => row && typeof row === 'object'
+    // 0.2.2 returns a history page or a typed miss; only a page carries records.
+    if (!('records' in result) || !Array.isArray(result.records) || !result.records.every(row => row && typeof row === 'object'
       && ['scheduledAt', 'deliveredAt', 'messageId'].every(key => row[key as keyof ScheduleDeliveryReceipt] === undefined || typeof row[key as keyof ScheduleDeliveryReceipt] === 'string'))) return unavailable('宿主没有返回有效的原生送达历史')
     const records = result.records.slice(-20)
     const delivered = records.some(row => (typeof row.messageId === 'string' && row.messageId.length > 0)
@@ -445,13 +452,14 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
           sendJson(res, 405, { ok: false, error: '只支持 GET' })
           return
         }
-        let reminders: ScheduleCatalogEntry[] = []
+        let reminders: ButlerReminderSummary[] = []
         let remindersAvailable = false
         let remindersError: string | undefined
         const services = deps.resolved?.() ?? []
         try {
           if (deps.schedule !== undefined) {
-            reminders = await deps.schedule.catalog()
+            // Host-side status normalization: paused/ended ⇒ inactive, raw status kept.
+            reminders = (await deps.schedule.catalog()).map(projectReminder)
             remindersAvailable = true
           } else {
             remindersError = `调度服务这次没有解析到（已解析：${services.join(', ') || '无'}）：提醒列表读不到，不代表没有提醒。`
@@ -482,19 +490,37 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
         let ledgerError: string | undefined
         let taskHistory: OverviewPayload['taskHistory']
         const budgets = readTaskBudgets(deps.budgetHistory)
+        // October acceptance fixture ids are archived, never deleted: the ledger
+        // keeps every byte, the dashboard hides what the archive index names.
+        const hiddenTasks = archivedTaskIds(), hiddenReminders = archivedReminderKeys()
+        const visibleTask = (id: string | undefined): boolean => id === undefined || !hiddenTasks.has(id)
+        const visibleOperation = (row: { taskId?: string; scheduleId?: string; executionKey: string }): boolean =>
+          visibleTask(row.taskId) && !(row.scheduleId !== undefined && hiddenReminders.has(row.scheduleId)) && !hiddenReminders.has(row.executionKey)
         try {
           const raw = snapshot(READ_ONLY)
-          ledger = { ...raw, open: raw.open.map(task => projectTaskRead(task, budgets)), interrupted: raw.interrupted.map(task => projectTaskRead(task, budgets)), recent: raw.recent.map(channelSafe) }
+          ledger = { ...raw,
+            open: raw.open.filter(task => visibleTask(task.id)).map(task => projectTaskRead(task, budgets)),
+            interrupted: raw.interrupted.filter(task => visibleTask(task.id)).map(task => projectTaskRead(task, budgets)),
+            recent: raw.recent.filter(row => visibleTask(row.taskId)).map(channelSafe) }
         }
         catch (error) { ledgerError = error instanceof Error ? error.message : String(error) }
         try {
-          const all = listTasks(READ_ONLY).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
+          const all = listTasks(READ_ONLY).filter(task => visibleTask(task.id)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
           taskHistory = { tasks: all.slice(0, 50).map(task => projectTaskRead(task, budgets)), total: all.length, limit: 50 }
         }
         catch (error) { ledgerError ??= error instanceof Error ? error.message : String(error) }
         let memory: ReturnType<typeof readMemoryStatus> | undefined, memoryError: string | undefined
         try { memory = readMemoryStatus(50, READ_ONLY) }
         catch (error) { memoryError = error instanceof Error ? error.message : String(error) }
+        // Host-read controls also carry reminder operations; hide archived ones
+        // without deleting their persisted records.
+        const rawControls = runtimeSnapshot(deps)
+        const controls = rawControls === undefined ? undefined : {
+          ...rawControls,
+          ...(rawControls.reminderOperations === undefined ? {} : {
+            reminderOperations: rawControls.reminderOperations.filter(row => visibleOperation(row as { taskId?: string; scheduleId?: string; executionKey: string })),
+          }),
+        }
         const payload: OverviewPayload = {
           ok: true,
           generatedAt: new Date().toISOString(),
@@ -513,8 +539,25 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
           ...(sessionError === undefined ? {} : { sessionError }),
           ...(deps.usage === undefined ? {} : { usageRecorder: deps.usage() }),
           ...(deps.usageBackfill === undefined ? {} : { usageBackfill: deps.usageBackfill() }),
-          ...(deps.runtimeControls === undefined ? {} : { runtimeControls: runtimeSnapshot(deps) }),
+          ...(deps.runtimeControls === undefined ? {} : { runtimeControls: controls }),
         }
+        // Conditional GET: the payload is big, and the panel polls it. The ETag
+        // covers the stable content only (not `generatedAt`), so an unchanged
+        // dashboard answers 304 with no body instead of re-sending everything.
+        const stable = { ...payload, generatedAt: '',
+          // `session.at` is the last-check timestamp; it moves on every read and
+          // would defeat revalidation without telling anyone anything new.
+          ...(payload.session === undefined ? {} : { session: { ...payload.session, at: '' } }) }
+        const etag = `"${createHash('sha1').update(JSON.stringify(stable)).digest('hex').slice(0, 32)}"`
+        const requested = req.headers?.['if-none-match']
+        const offered = typeof requested === 'string' ? requested : Array.isArray(requested) ? requested.join(',') : ''
+        if (offered.split(',').some(value => value.trim() === etag)) {
+          res.statusCode = 304
+          res.setHeader('etag', etag)
+          res.end()
+          return
+        }
+        res.setHeader('etag', etag)
         sendJson(res, 200, payload)
       },
     }),
