@@ -792,3 +792,21 @@ test('settings route reports effective values, data locations, retention and bac
     assert.equal((await e.request('/dsh-butler/api/settings', 'POST')).status, 405)
   } finally { e.dispose() }
 })
+
+test('usage report route rolls up daily rows with explicit cost coverage', async () => {
+  addUsage({ at: '2026-11-07T03:00:00.000Z', callId: `usage-api-${randomUUID()}`, inputTokens: 10, outputTokens: 5, totalTokens: 15, cost: 0.01 })
+  const e = api()
+  try {
+    const response = await e.request('/dsh-butler/api/usage-report?days=7')
+    assert.equal(response.status, 200)
+    assert.equal(response.body.ok, true)
+    assert.equal(response.body.days, 7)
+    assert.equal(response.body.daily.length, 7)
+    assert.equal(typeof response.body.totals.calls, 'number')
+    assert.deepEqual(Object.keys(response.body.coverage).sort(), ['missing', 'priced', 'unpriced'])
+    assert.match(response.body.note, /估算/)
+    const clamped = await e.request('/dsh-butler/api/usage-report?days=999')
+    assert.equal(clamped.body.days, 90)
+    assert.equal((await e.request('/dsh-butler/api/usage-report', 'POST')).status, 405)
+  } finally { e.dispose() }
+})

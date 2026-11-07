@@ -226,6 +226,42 @@ export interface SettingsPayload {
   backups: SettingsBackup[]
 }
 
+/** One day of usage and estimated cost. */
+export interface UsageReportDay {
+  date: string
+  calls: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  cost: number
+  pricedCalls: number
+  unpricedCalls: number
+  missingCalls: number
+}
+
+/** Daily usage/cost report. */
+export interface UsageReportPayload {
+  ok: boolean
+  days: number
+  fromDate: string
+  toDate: string
+  timeZone: string
+  daily: UsageReportDay[]
+  totals: UsageReportDay
+  coverage: { priced: number; unpriced: number; missing: number }
+  note: string
+}
+
+/**
+ * Read the daily usage/cost roll-up.
+ * @param days - window size (1..90; host clamps).
+ * @param signal - abort signal for the caller's lifetime.
+ * @returns the report.
+ */
+export async function fetchUsageReport(days = 14, signal?: AbortSignal): Promise<UsageReportPayload> {
+  return await getJson(`${API_PREFIX}/usage-report?days=${encodeURIComponent(String(days))}`, signal) as UsageReportPayload
+}
+
 /** Read the settings snapshot. */
 export async function fetchSettings(signal?: AbortSignal): Promise<SettingsPayload> {
   return await getJson(`${API_PREFIX}/settings`, signal) as SettingsPayload

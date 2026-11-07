@@ -10,7 +10,7 @@
  */
 import { createElement as h, useEffect, useState } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
-import { createBackup, fetchSettings, type SettingsPayload } from './api.ts'
+import { createBackup, fetchSettings, fetchUsageReport, type SettingsPayload, type UsageReportPayload } from './api.ts'
 import { BUTLER_COLORS, BUTLER_SPACE, Button, InlineError, KeyValue, LoadingBlock } from './ui/index.ts'
 
 /** Props the settings seat hands over. */
@@ -41,13 +41,16 @@ function slotLine(slot: SettingsPayload['brief']['slots'][number]): string {
  */
 export function ButlerSettings(props: ButlerSettingsProps): unknown {
   const [settings, setSettings] = useState<SettingsPayload | null>(null)
+  const [usage, setUsage] = useState<UsageReportPayload | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [lastBackup, setLastBackup] = useState<string | null>(null)
 
   const load = async (): Promise<void> => {
     try {
-      setSettings(await fetchSettings())
+      const [nextSettings, nextUsage] = await Promise.all([fetchSettings(), fetchUsageReport(14)])
+      setSettings(nextSettings)
+      setUsage(nextUsage)
       setError(null)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -96,6 +99,18 @@ export function ButlerSettings(props: ButlerSettingsProps): unknown {
       lastBackup === null ? null : h('span', { style: { fontSize: '12px', color: BUTLER_COLORS.labelSecondary } }, `已创建 ${lastBackup}`)),
     h(KeyValue, { label: '备份目录', value: settings.data.backupHome }),
     h(KeyValue, { label: '快照保留', value: `最新 ${settings.retention.backupKeep} 份` }),
+    h('h3', { style: { margin: `${BUTLER_SPACE.sm} 0 0`, fontSize: '13px', lineHeight: '20px', color: BUTLER_COLORS.labelPrimary } }, '用量与费用（近 14 天）'),
+    usage === null ? h('div', { style: { fontSize: '12px', color: BUTLER_COLORS.labelSecondary } }, '用量暂不可读。')
+      : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
+        h('div', { style: { fontSize: '12px', lineHeight: '18px', color: BUTLER_COLORS.labelPrimary } },
+          `${usage.fromDate} → ${usage.toDate}：${usage.totals.calls} 次调用 / ${usage.totals.totalTokens.toLocaleString('en-US')} tokens / 估算 ¥${usage.totals.cost.toFixed(2)} / 未计价 ${usage.coverage.unpriced} / 无用量 ${usage.coverage.missing}`),
+        ...usage.daily.slice(-7).map(day => h('div', {
+          key: day.date,
+          style: { display: 'flex', justifyContent: 'space-between', gap: BUTLER_SPACE.sm, fontSize: '12px', color: BUTLER_COLORS.labelSecondary },
+        },
+        h('span', {}, day.date),
+        h('span', {}, `${day.calls} 次 · ${day.totalTokens.toLocaleString('en-US')} tok · ¥${day.cost.toFixed(2)}${day.unpricedCalls === 0 ? '' : ` · 未计价 ${day.unpricedCalls}`}`))),
+        h('p', { style: { margin: '0', fontSize: '12px', lineHeight: '18px', color: BUTLER_COLORS.labelSecondary } }, usage.note)),
     h('div', { style: { fontSize: '12px', color: BUTLER_COLORS.labelSecondary } },
       settings.backups.length === 0 ? '还没有备份。' : `已有 ${settings.backups.length} 份备份：`),
     ...settings.backups.slice(0, 5).map(entry => h('div', {

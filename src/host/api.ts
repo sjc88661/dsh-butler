@@ -30,6 +30,7 @@ import { storageStatus, compactionBackupRetentionPolicy } from './store.ts'
 import { BRIEF_SLOTS } from './brief.ts'
 import { searchAll } from './search.ts'
 import { createBackup, defaultBackupHome, listBackups, restoreBackup } from './backup.ts'
+import { usageReport } from './usage-report.ts'
 import { archivedReminderKeys, archivedTaskIds } from './archive.ts'
 import type { ArtifactSnapshot, HistoryBudget, HistoryItems, HistoryKind, HistoryPage, RuntimeControlsSnapshot, TaskDetail, TaskReadSnapshot, TaskReminderSnapshot, ReminderOperationSnapshot } from '../shared/workbench.ts'
 import type { Task } from './ledger.ts'
@@ -792,6 +793,19 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
           if (task === undefined) { sendJson(res, 503, { ok: false, error: '任务没有写入账本' }); return }
           sendJson(res, 200, { ok: true, task: { id: task.id, title: task.title, status: task.status, createdAt: task.createdAt, updatedAt: task.updatedAt } })
         } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
+      },
+    }),
+    server.register({
+      // Daily usage/cost roll-up. Cost is an estimate from the bundled price
+      // table, with unpriced/missing calls stated separately — never a bill.
+      kind: 'exact',
+      path: `${API_PREFIX}/usage-report`,
+      handler: (req, res) => {
+        if ((req.method ?? 'GET').toUpperCase() !== 'GET') { sendJson(res, 405, { ok: false, error: '用量报表只支持 GET' }); return }
+        const raw = Number(new URL(req.url ?? '/', 'http://localhost').searchParams.get('days'))
+        const days = Number.isSafeInteger(raw) ? raw : 14
+        try { sendJson(res, 200, { ok: true, ...usageReport({ days, timeZone: deps.timeZone }) }) }
+        catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
       },
     }),
     server.register({
