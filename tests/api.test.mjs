@@ -750,3 +750,21 @@ test('capture route records one pending task and validates input', async () => {
     assert.equal((await e.request('/dsh-butler/api/capture', 'GET')).status, 405)
   } finally { e.dispose() }
 })
+
+test('backup routes create, list and guard restore', async () => {
+  const e = api()
+  try {
+    const created = await e.request('/dsh-butler/api/backup', 'POST')
+    assert.equal(created.status, 200)
+    assert.equal(created.body.ok, true)
+    assert.match(created.body.id, /^butler-backup-/)
+    assert.ok(created.body.files > 0)
+    const listed = await e.request('/dsh-butler/api/backup')
+    assert.ok(listed.body.backups.some(backup => backup.id === created.body.id))
+    assert.equal((await e.request('/dsh-butler/api/backup', 'PUT')).status, 405)
+    assert.equal((await e.request('/dsh-butler/api/restore', 'POST', { id: created.body.id })).status, 400)
+    assert.equal((await e.request('/dsh-butler/api/restore', 'POST', { id: 'bad id', confirm: 'RESTORE' })).status, 400)
+    assert.equal((await e.request('/dsh-butler/api/restore', 'POST', { id: 'butler-backup-19990101T000000', confirm: 'RESTORE' })).status, 404)
+    assert.equal((await e.request('/dsh-butler/api/restore', 'GET')).status, 405)
+  } finally { e.dispose() }
+})

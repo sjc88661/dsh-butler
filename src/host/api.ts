@@ -28,6 +28,7 @@ import { decideMemo, getTask, listMemos, listTasks, receipts, setButlerSessionId
 import { EvidenceStore } from './evidence-store.ts'
 import { storageStatus } from './store.ts'
 import { searchAll } from './search.ts'
+import { createBackup, defaultBackupHome, listBackups, restoreBackup } from './backup.ts'
 import { archivedReminderKeys, archivedTaskIds } from './archive.ts'
 import type { ArtifactSnapshot, HistoryBudget, HistoryItems, HistoryKind, HistoryPage, RuntimeControlsSnapshot, TaskDetail, TaskReadSnapshot, TaskReminderSnapshot, ReminderOperationSnapshot } from '../shared/workbench.ts'
 import type { Task } from './ledger.ts'
@@ -790,6 +791,55 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
           if (task === undefined) { sendJson(res, 503, { ok: false, error: '任务没有写入账本' }); return }
           sendJson(res, 200, { ok: true, task: { id: task.id, title: task.title, status: task.status, createdAt: task.createdAt, updatedAt: task.updatedAt } })
         } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
+      },
+    }),
+    server.register({
+      // Local snapshots of the non-regenerable vault/state. A backup contains
+      // personal notes, so it never leaves this machine and nothing is uploaded.
+      kind: 'exact',
+      path: `${API_PREFIX}/backup`,
+      handler: async (req, res) => {
+        const method = (req.method ?? 'GET').toUpperCase()
+        if (method === 'GET') {
+          try { sendJson(res, 200, { ok: true, backups: listBackups(defaultBackupHome()) }) }
+          catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
+          return
+        }
+        if (method !== 'POST') { sendJson(res, 405, { ok: false, error: '备份只支持 GET/POST' }); return }
+        try {
+          const result = createBackup()
+          sendJson(res, 200, { ok: true, id: result.id, directory: result.directory,
+            files: result.manifest.files.length, bytes: result.manifest.bytes,
+            counts: result.manifest.counts, excluded: result.manifest.excluded })
+        } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
+      },
+    }),
+    server.register({
+      // Destructive: overwrite the vault/state from a verified snapshot. Requires
+      // the explicit confirmation phrase and creates a pre-restore backup first.
+      kind: 'exact',
+      path: `${API_PREFIX}/restore`,
+      handler: async (req, res) => {
+        if ((req.method ?? 'GET').toUpperCase() !== 'POST') { sendJson(res, 405, { ok: false, error: '恢复只支持 POST' }); return }
+        let raw: unknown
+        try { raw = JSON.parse(await readBody(req)) } catch (error) {
+          sendJson(res, 400, { ok: false, error: `请求体不是有效 JSON：${errorText(error)}` }); return
+        }
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) { sendJson(res, 400, { ok: false, error: '请求体必须是对象' }); return }
+        const body = raw as Record<string, unknown>
+        const id = typeof body.id === 'string' ? body.id.trim() : ''
+        const confirm = typeof body.confirm === 'string' ? body.confirm : ''
+        if (id === '' || !/^butler-backup-[\w.-]+$/.test(id)) { sendJson(res, 400, { ok: false, error: '备份 ID 无效' }); return }
+        if (confirm !== 'RESTORE') { sendJson(res, 400, { ok: false, error: '恢复需要 confirm: "RESTORE"' }); return }
+        try {
+          const restored = restoreBackup(defaultBackupHome(), id, confirm)
+          sendJson(res, 200, { ok: true, id: restored.id, restored: restored.restored, preRestore: restored.preRestore,
+            note: '恢复完成；恢复前的状态已另存为 preRestore 备份。' })
+        } catch (error) {
+          const message = errorText(error)
+          sendJson(res, /没有这个备份/.test(message) ? 404 : /校验失败|缺少文件|版本/.test(message) ? 422 : 503,
+            { ok: false, error: message })
+        }
       },
     }),
     server.register({
