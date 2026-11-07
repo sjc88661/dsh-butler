@@ -68,7 +68,7 @@
 ### P3 跨端与运维
 
 - [x] **备份 / 导出 / 恢复**：`POST/GET /api/backup` 快照 vault+state（跳过 cache/logs/压缩备份；每文件 SHA256 写 manifest；默认保留 5 份）；`POST /api/restore` 需 `confirm:"RESTORE"`，先校验每个文件哈希并自动生成 pre-restore 备份，校验失败不写盘；manifest 损坏的备份在列表里标 `broken` 而不是隐藏
-- [ ] 设置页（`settings.section`：时区/简报/飞书状态/数据目录/保留策略/备份列表与一键备份）
+- [x] **设置页**（`settings.section` 席位，标题「管家」）：只读呈现时区、早报/晚报时段与补写窗口、飞书启用/已发/失败/放弃/最近错误、数据目录、压缩备份保留策略、快照列表；唯一写操作「立即备份」（本地快照）；配置本身仍归 profile 的 Cordis patch
 - [ ] 用量费用日报页面（简报已含每日用量行）
 - [ ] 飞书正式账户/凭据迁 credentials
 

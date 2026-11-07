@@ -194,6 +194,53 @@ async function getJson(path: string, signal?: AbortSignal): Promise<unknown> {
   return value
 }
 
+/** One brief slot as the settings page lists it. */
+export interface SettingsBriefSlot {
+  kind: 'morning' | 'evening'
+  label: string
+  heading: string
+  hour: number
+  minute: number
+  untilHour: number
+}
+
+/** One local snapshot. */
+export interface SettingsBackup {
+  id: string
+  directory: string
+  createdAt?: string
+  bytes?: number
+  files?: number
+  broken?: string
+}
+
+/** Read-only settings snapshot exposed by `GET /api/settings`. */
+export interface SettingsPayload {
+  ok: boolean
+  timeZone: string
+  brief: { slots: SettingsBriefSlot[] }
+  feishu: { enabled: boolean; configured: boolean; sent?: number; failed?: number; gaveUp?: number; lastError?: string; lastTickAt?: string }
+  data: { vaultHome: string; stateHome: string; backupHome: string }
+  retention: { compaction: { keepNewest: number; days: number; maxBytes: number }; backupKeep: number }
+  storage?: unknown
+  backups: SettingsBackup[]
+}
+
+/** Read the settings snapshot. */
+export async function fetchSettings(signal?: AbortSignal): Promise<SettingsPayload> {
+  return await getJson(`${API_PREFIX}/settings`, signal) as SettingsPayload
+}
+
+/** Create one local backup; resolves with its id. */
+export async function createBackup(signal?: AbortSignal): Promise<{ ok: boolean; id: string; files?: number; bytes?: number; directory?: string }> {
+  const response = await fetch(`${API_PREFIX}/backup`, { method: 'POST', signal, headers: { accept: 'application/json' } })
+  let payload: unknown
+  try { payload = await response.json() } catch { payload = undefined }
+  const record = payload !== null && typeof payload === 'object' ? payload as Record<string, unknown> : undefined
+  if (!response.ok || record?.['ok'] !== true) throw new Error(typeof record?.['error'] === 'string' ? record['error'] : `HTTP ${response.status}`)
+  return record as unknown as { ok: boolean; id: string; files?: number; bytes?: number; directory?: string }
+}
+
 /** What one quick capture wrote. */
 export interface CaptureResult {
   ok: boolean

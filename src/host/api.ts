@@ -26,7 +26,8 @@ import { projectReminder } from './remind.ts'
 import type { UsageBackfillState } from './backfill.ts'
 import { decideMemo, getTask, listMemos, listTasks, receipts, setButlerSessionId, setTaskStatus, snapshot, upsertTask, usageRecords, usageTotals } from './ledger.ts'
 import { EvidenceStore } from './evidence-store.ts'
-import { storageStatus } from './store.ts'
+import { storageStatus, compactionBackupRetentionPolicy } from './store.ts'
+import { BRIEF_SLOTS } from './brief.ts'
 import { searchAll } from './search.ts'
 import { createBackup, defaultBackupHome, listBackups, restoreBackup } from './backup.ts'
 import { archivedReminderKeys, archivedTaskIds } from './archive.ts'
@@ -38,7 +39,7 @@ import { readMemoryStatus } from './memory.ts'
 import { packsSummary } from './packs.ts'
 import type { ButlerSessionInfo } from './session.ts'
 import type { UsageRecorderStatus } from './usage.ts'
-import { VAULT_HOME, listFiles, readText, vaultPath } from './vault.ts'
+import { STATE_HOME, VAULT_HOME, listFiles, readText, vaultPath } from './vault.ts'
 
 /** The slice of the host's HTTP service these routes need. */
 export interface WebServerLike {
@@ -791,6 +792,28 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
           if (task === undefined) { sendJson(res, 503, { ok: false, error: '任务没有写入账本' }); return }
           sendJson(res, 200, { ok: true, task: { id: task.id, title: task.title, status: task.status, createdAt: task.createdAt, updatedAt: task.updatedAt } })
         } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
+      },
+    }),
+    server.register({
+      // One read-only settings snapshot: only fields the host already owns, so
+      // the settings page never guesses a path or a policy number.
+      kind: 'exact',
+      path: `${API_PREFIX}/settings`,
+      handler: (req, res) => {
+        if ((req.method ?? 'GET').toUpperCase() !== 'GET') { sendJson(res, 405, { ok: false, error: '设置只支持 GET' }); return }
+        let storage: ReturnType<typeof storageStatus> | undefined
+        try { storage = storageStatus() } catch { storage = undefined }
+        sendJson(res, 200, {
+          ok: true,
+          timeZone: deps.timeZone,
+          brief: { slots: BRIEF_SLOTS.map(slot => ({ kind: slot.kind, label: slot.label, heading: slot.heading,
+            hour: slot.hour, minute: slot.minute, untilHour: slot.untilHour })) },
+          feishu: deps.feishu?.() ?? { enabled: false, configured: false },
+          data: { vaultHome: VAULT_HOME, stateHome: STATE_HOME, backupHome: defaultBackupHome() },
+          retention: { compaction: compactionBackupRetentionPolicy(), backupKeep: 5 },
+          ...(storage === undefined ? {} : { storage }),
+          backups: listBackups(defaultBackupHome()),
+        })
       },
     }),
     server.register({

@@ -63,7 +63,7 @@ async function mounted(plugin, exercise) {
   await consumer.await()
   try {
     assert.equal(provider.state, 2); assert.equal(consumer.state, 2)
-    assert.deepEqual(registrations.map(row => row.options.name), ['conversation.session.header.actions', 'sidebar.panellist', 'main', 'conversation.view', 'conversation.input.dock', 'shell.overlay', 'sidebar.right.pane.tab'])
+    assert.deepEqual(registrations.map(row => row.options.name), ['conversation.session.header.actions', 'sidebar.panellist', 'main', 'conversation.view', 'conversation.input.dock', 'shell.overlay', 'settings.section', 'sidebar.right.pane.tab'])
     assert.equal(tabTypes[0].kind, 'butler-workspace')
     assert.equal(registrations.find(row => row.options.name === 'sidebar.right.pane.tab').options.key, tabTypes[0].id, 'Native registry and body use the same exact public identity')
     assert.equal(registrations.find(row => row.options.name === 'sidebar.panellist').options.id, 'butler')

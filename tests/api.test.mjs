@@ -768,3 +768,27 @@ test('backup routes create, list and guard restore', async () => {
     assert.equal((await e.request('/dsh-butler/api/restore', 'GET')).status, 405)
   } finally { e.dispose() }
 })
+
+test('settings route reports effective values, data locations, retention and backups', async () => {
+  const e = api({ feishu: () => ({ enabled: true, configured: true, sent: 2 }) })
+  try {
+    const response = await e.request('/dsh-butler/api/settings')
+    assert.equal(response.status, 200)
+    assert.equal(response.body.ok, true)
+    assert.equal(response.body.timeZone, 'Asia/Shanghai')
+    assert.equal(response.body.brief.slots.length, 2)
+    assert.deepEqual(response.body.brief.slots.map(slot => slot.kind), ['morning', 'evening'])
+    assert.equal(response.body.brief.slots[0].hour, 8)
+    assert.equal(response.body.brief.slots[0].minute, 30)
+    assert.equal(response.body.brief.slots[1].hour, 21)
+    assert.equal(response.body.brief.slots[1].minute, 30)
+    assert.deepEqual(response.body.feishu, { enabled: true, configured: true, sent: 2 })
+    assert.match(response.body.data.vaultHome, /vault$/)
+    assert.match(response.body.data.backupHome, /backups$/)
+    assert.equal(response.body.retention.compaction.days, 7)
+    assert.equal(response.body.retention.compaction.maxBytes, 64 * 1024 * 1024)
+    assert.equal(response.body.retention.backupKeep, 5)
+    assert.ok(Array.isArray(response.body.backups))
+    assert.equal((await e.request('/dsh-butler/api/settings', 'POST')).status, 405)
+  } finally { e.dispose() }
+})

@@ -28,6 +28,7 @@ import { PANEL_ID, PANEL_ORDER } from './ids.ts'
 import { ButlerWorkbench } from './panel.ts'
 import { clientService } from './navigate.ts'
 import { ButlerReminderOverlay } from './reminder-overlay.ts'
+import { ButlerSettings } from './settings.ts'
 import { ButlerRightPane, ButlerSourceDock, ButlerWorkspacePage } from './workspace-panel.ts'
 
 /** Required core services; optional native workspace/rightbar faces are resolved per action. */
@@ -141,6 +142,17 @@ export function apply(ctx: Context): void {
       return slots.register({ name: 'shell.overlay', id: 'butler-reminder-overlay', order: 20, label: () => '到期提醒', inject: () => ({ ctx }) }, ButlerReminderOverlay as never)
     } catch (error) {
       console.error('[dsh-butler] 到期提醒浮层 注册失败：', error)
+      return () => {}
+    }
+  }))
+
+  disposers.push(slots.inject('settings.section', () => {
+    try {
+      // Read-only settings page: current effective values, data locations and
+      // local snapshots; configuration edits stay in the profile patch.
+      return slots.register({ name: 'settings.section', id: 'butler', order: 50, label: () => '管家' }, ButlerSettings as never)
+    } catch (error) {
+      console.error('[dsh-butler] 设置页 注册失败：', error)
       return () => {}
     }
   }))

@@ -703,6 +703,11 @@ function compactionBackupFiles(directory: string): CompactionBackupFile[] {
   return files.sort((left, right) => left.mtimeMs - right.mtimeMs || left.name.localeCompare(right.name))
 }
 
+/** The effective compaction-backup retention policy, for the settings page. */
+export function compactionBackupRetentionPolicy(): { keepNewest: number; days: number; maxBytes: number } {
+  return { keepNewest: COMPACT_BACKUP_KEEP_NEWEST, days: compactBackupRetainDays(), maxBytes: compactBackupMaxTotalBytes() }
+}
+
 /**
  * Apply the compaction-backup retention policy to one directory.
  *
