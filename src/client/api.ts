@@ -1,12 +1,12 @@
 /**
  * Client-side data access for the butler workbench.
  *
- * Everything here is READ-ONLY on purpose. The host half exposes typed
- * read endpoints (`src/host/api.ts`), and every state-changing operation is
- * meant to travel through the agent's `butler_*` tools so the ledger, the
- * receipts and the evidence guard all see it. A panel that could approve its
- * own proposals would route around the one rule this project is built on:
- * nothing with consequences runs without a recorded decision.
+ * Everything here reads host state; the single exception is {@link taskAction},
+ * which records the owner's own one-click bookkeeping (done/postpone/cancel) so
+ * they do not have to open a conversation for routine housekeeping. It changes
+ * only the local task ledger and never triggers an external action; anything
+ * with consequences still travels through the agent's `butler_*` tools so the
+ * ledger, receipts and evidence guard see it.
  *
  * @module @dsh-external/dsh-butler/client
  */
@@ -202,6 +202,46 @@ export async function fetchTask(id: string, signal?: AbortSignal): Promise<TaskD
   const payload = await getJson(`${API_PREFIX}/task?id=${encodeURIComponent(id)}`, signal) as Partial<TaskDetail>
   if (payload.ok !== true || payload.task?.id !== id) throw new Error('任务详情结构或身份不匹配')
   return payload as TaskDetail
+}
+
+/** One-click local bookkeeping the workbench may perform on a task. */
+export type TaskActionName = 'done' | 'postpone' | 'cancel'
+
+/** What one task action changed. */
+export interface TaskActionResult {
+  ok: boolean
+  task?: { id: string; title: string; status: TaskStatus; updatedAt: string; dueAt?: string }
+  error?: string
+}
+
+/**
+ * Change one task's status or due date from the workbench.
+ *
+ * This is the only mutation the client performs: it records the owner's own
+ * decision in the local ledger (audited by an operation id) and never sends a
+ * message, spends money or runs an external action.
+ * @param action - done, postpone (default: +24h) or cancel.
+ * @param id - ledger task id.
+ * @param options - explicit due date (ISO) or a note.
+ * @param signal - abort signal for the caller's lifetime.
+ * @returns the updated task, or the host's refusal message.
+ */
+export async function taskAction(action: TaskActionName, id: string,
+  options: { dueAt?: string; note?: string } = {}, signal?: AbortSignal): Promise<TaskActionResult> {
+  const dueAt = action === 'postpone' ? options.dueAt ?? new Date(Date.now() + 24 * 3600 * 1000).toISOString() : options.dueAt
+  const response = await fetch(`${API_PREFIX}/action`, {
+    method: 'POST', signal,
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ action: `task-${action}`, id, ...(dueAt === undefined ? {} : { dueAt }), ...(options.note === undefined ? {} : { note: options.note }) }),
+  })
+  let payload: unknown
+  try { payload = await response.json() } catch { payload = undefined }
+  const record = payload !== null && typeof payload === 'object' ? payload as Record<string, unknown> : undefined
+  if (!response.ok || record?.['ok'] !== true) {
+    const message = typeof record?.['error'] === 'string' ? record['error'] : `HTTP ${response.status}`
+    return { ok: false, error: message }
+  }
+  return record as unknown as TaskActionResult
 }
 
 /** Browse one immutable projection revision, scoped to the exact selected task. */

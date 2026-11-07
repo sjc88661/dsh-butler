@@ -20,11 +20,11 @@
  *
  * @module @dsh-external/dsh-butler/host/api
  */
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { ButlerContext, ButlerReminderSummary, ScheduleCatalogEntry, ScheduleService, ScheduleDeliveryReceipt } from './ctx.ts'
 import { projectReminder } from './remind.ts'
 import type { UsageBackfillState } from './backfill.ts'
-import { getTask, listTasks, receipts, setButlerSessionId, snapshot, usageRecords, usageTotals } from './ledger.ts'
+import { getTask, listTasks, receipts, setButlerSessionId, setTaskStatus, snapshot, upsertTask, usageRecords, usageTotals } from './ledger.ts'
 import { EvidenceStore } from './evidence-store.ts'
 import { storageStatus } from './store.ts'
 import { archivedReminderKeys, archivedTaskIds } from './archive.ts'
@@ -559,6 +559,48 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
         }
         res.setHeader('etag', etag)
         sendJson(res, 200, payload)
+      },
+    }),
+    server.register({
+      // The workbench's one-click bookkeeping. Deliberately narrow: status and
+      // due-date changes on the owner's own ledger, audited by an operation id.
+      // External actions (messages, payments) never travel through this route.
+      kind: 'exact',
+      path: `${API_PREFIX}/action`,
+      handler: async (req, res) => {
+        if ((req.method ?? 'GET').toUpperCase() !== 'POST') { sendJson(res, 405, { ok: false, error: '任务操作只支持 POST' }); return }
+        let raw: unknown
+        try { raw = JSON.parse(await readBody(req)) } catch (error) {
+          sendJson(res, 400, { ok: false, error: `请求体不是有效 JSON：${errorText(error)}` }); return
+        }
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) { sendJson(res, 400, { ok: false, error: '请求体必须是对象' }); return }
+        const body = raw as Record<string, unknown>
+        const action = typeof body.action === 'string' ? body.action : ''
+        const id = typeof body.id === 'string' ? body.id.trim() : ''
+        const note = typeof body.note === 'string' && body.note.trim() !== '' ? body.note.trim().slice(0, 500) : undefined
+        const allowed = new Set(['task-done', 'task-cancel', 'task-reopen', 'task-postpone'])
+        if (!allowed.has(action)) { sendJson(res, 400, { ok: false, error: `不支持的 action：${action || '(空)'}` }); return }
+        if (id === '' || id.length > 256) { sendJson(res, 400, { ok: false, error: '任务 ID 无效' }); return }
+        if (archivedTaskIds().has(id)) { sendJson(res, 409, { ok: false, error: '这是已归档的验收 fixture，工作台不修改它。' }); return }
+        if (getTask(id, READ_ONLY) === undefined) { sendJson(res, 404, { ok: false, error: '没有这个任务' }); return }
+        const operation = { operationId: `web-${action}-${id}-${randomUUID()}` }
+        try {
+          let updated
+          if (action === 'task-postpone') {
+            const requested = typeof body.dueAt === 'string' ? Date.parse(body.dueAt) : Number.NaN
+            const dueAt = Number.isFinite(requested) ? new Date(requested).toISOString() : new Date(Date.now() + 24 * 3600 * 1000).toISOString()
+            updated = upsertTask(id, { status: 'pending', dueAt }, operation)
+          } else {
+            const status = action === 'task-done' ? 'done' : action === 'task-cancel' ? 'cancelled' : 'pending'
+            const fallback = action === 'task-done' ? '工作台一键完成（未附证据）' : action === 'task-cancel' ? '工作台取消' : '工作台重新打开'
+            updated = setTaskStatus(id, status, note ?? fallback, deps.timeZone, operation)
+          }
+          if (updated === undefined) { sendJson(res, 404, { ok: false, error: '没有这个任务' }); return }
+          sendJson(res, 200, { ok: true, action, task: {
+            id: updated.id, title: updated.title, status: updated.status, updatedAt: updated.updatedAt,
+            ...(updated.dueAt === undefined ? {} : { dueAt: updated.dueAt }),
+          } })
+        } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
       },
     }),
     server.register({

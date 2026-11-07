@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 const base = resolve('tests/.tmp'); mkdirSync(base, { recursive: true })
 const home = mkdtempSync(join(base, 'api-'))
@@ -21,11 +21,16 @@ ensureVault()
 function api(deps = {}) {
   const routes = new Map()
   const dispose = registerButlerApi({ webServer: { register(route) { routes.set(route.path, route.handler); return () => routes.delete(route.path) } } }, { timeZone: 'Asia/Shanghai', ...deps })
-  async function request(path, method = 'GET') {
+  async function request(path, method = 'GET', body) {
     const handler = routes.get(path.split('?')[0]); assert.equal(typeof handler, 'function', `Read route is missing: ${path}`)
     const req = Object.assign(new EventEmitter(), { method, url: path }), headers = {}
     let response
-    await handler(req, { statusCode: 200, setHeader(name, value) { headers[name] = value }, end(body) { response = { status: this.statusCode, body: JSON.parse(body), headers } } })
+    const pending = handler(req, { statusCode: 200, setHeader(name, value) { headers[name] = value }, end(value) { response = { status: this.statusCode, body: value === undefined ? undefined : JSON.parse(value), headers } } })
+    if (body !== undefined) {
+      const payload = Buffer.from(JSON.stringify(body))
+      setImmediate(() => { req.emit('data', payload); req.emit('end') })
+    }
+    await pending
     return response
   }
   return { request, dispose, routes }
@@ -551,4 +556,55 @@ test('overview polling preserves a prepared WAL and every saved byte across ledg
     assert.equal(response.body.taskHistory.tasks.find(row => row.id === id).title, 'Saved overview task', 'Overview must use saved task rows')
     assert.deepEqual(fixtureBytes(), before, 'Polling overview must not replay any prepared transaction or write a recovery commit')
   } finally { writeFileSync(tasks, saved); if (savedMemos) writeFileSync(memos, savedMemos); else unlinkSync(memos); writeFileSync(journal, journalBefore); e.dispose() }
+})
+
+test('task action route records done/postpone/cancel on the local ledger and refuses bad input', async () => {
+  const doneId = `action-done-${randomUUID()}`
+  upsertTask(doneId, { title: 'One-click done', status: 'pending' })
+  const e = api()
+  try {
+    const done = await e.request('/dsh-butler/api/action', 'POST', { action: 'task-done', id: doneId })
+    assert.equal(done.status, 200)
+    assert.equal(done.body.ok, true)
+    assert.equal(done.body.task.status, 'done')
+    const history = await e.request('/dsh-butler/api/history?kind=tasks')
+    assert.equal(history.body.items.find(row => row.id === doneId).status, 'done')
+
+    const postponeId = `action-postpone-${randomUUID()}`
+    upsertTask(postponeId, { title: 'One-click postpone', status: 'pending', dueAt: '2026-01-01T00:00:00.000Z' })
+    const dueAt = '2030-01-02T03:04:00.000Z'
+    const postponed = await e.request('/dsh-butler/api/action', 'POST', { action: 'task-postpone', id: postponeId, dueAt })
+    assert.equal(postponed.body.task.status, 'pending')
+    assert.equal(postponed.body.task.dueAt, dueAt)
+
+    const cancelId = `action-cancel-${randomUUID()}`
+    upsertTask(cancelId, { title: 'One-click cancel', status: 'waiting_review' })
+    const cancelled = await e.request('/dsh-butler/api/action', 'POST', { action: 'task-cancel', id: cancelId, note: '用户取消' })
+    assert.equal(cancelled.body.task.status, 'cancelled')
+
+    assert.equal((await e.request('/dsh-butler/api/action', 'POST', { action: 'task-explode', id: doneId })).status, 400)
+    assert.equal((await e.request('/dsh-butler/api/action', 'POST', { action: 'task-done', id: 'missing-task' })).status, 404)
+    assert.equal((await e.request('/dsh-butler/api/action', 'GET')).status, 405)
+    assert.equal((await e.request('/dsh-butler/api/action', 'POST', { action: 'task-done' })).status, 400)
+  } finally { e.dispose() }
+})
+
+test('task action route refuses archived fixtures instead of rewriting the archive', async () => {
+  const archivedId = `action-archived-${randomUUID()}`
+  upsertTask(archivedId, { title: 'Archived fixture', status: 'pending' })
+  const index = vaultPath('archive', 'index.json')
+  mkdirSync(dirname(index), { recursive: true })
+  const previous = existsSync(index) ? readFileSync(index) : undefined
+  const batches = previous === undefined ? [] : JSON.parse(previous).batches ?? []
+  writeFileSync(index, JSON.stringify({ version: 1, batches: [...batches, { batchId: `test-${randomUUID()}`,
+    tasks: [{ id: archivedId, reason: 'test fixture', matchedBy: 'DSH007' }], reminders: [], receipts: [] }] }))
+  const e = api()
+  try {
+    const refused = await e.request('/dsh-butler/api/action', 'POST', { action: 'task-done', id: archivedId })
+    assert.equal(refused.status, 409)
+    assert.match(refused.body.error, /归档/)
+  } finally {
+    if (previous === undefined) unlinkSync(index); else writeFileSync(index, previous)
+    e.dispose()
+  }
 })

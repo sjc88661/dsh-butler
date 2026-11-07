@@ -52,6 +52,12 @@ import { budgetRow, memoryContent, runtimeContent } from '../workbench-details.t
 import { HistorySection } from '../history.ts'
 import { packRow } from '../packs.ts'
 
+/** 工作台可以一键完成的本地账本动作（不触发任何外部行为）。 */
+export type TaskRowAction = 'done' | 'postpone' | 'cancel'
+
+/** 任务行动作回调：面板负责发请求、刷新与提示。 */
+export type TaskActionHandler = (action: TaskRowAction, task: Task) => void
+
 /* -------------------------------------------------------------------------- */
 /* Shared row/layout styles (design tokens only)                               */
 /* -------------------------------------------------------------------------- */
@@ -106,7 +112,7 @@ const mutedLine = (text: string, key?: string | number): unknown =>
  * @param operations - reminder operation snapshots from the runtime controls.
  * @returns the row element.
  */
-export function taskRow(task: Task, openTask: (id: string) => void, selected: boolean, operations: NonNullable<Overview['runtimeControls']>['reminderOperations'] = []): unknown {
+export function taskRow(task: Task, openTask: (id: string) => void, selected: boolean, operations: NonNullable<Overview['runtimeControls']>['reminderOperations'] = [], taskActions?: TaskActionHandler): unknown {
   const evidence = task.evidence?.length ?? 0
   const reminder = task.kind === 'reminder' || task.reminder !== undefined
   const delivery = reminder ? reminderView({
@@ -122,22 +128,29 @@ export function taskRow(task: Task, openTask: (id: string) => void, selected: bo
     evidence === 0 ? '' : ` · 证据 ${evidence}`,
     note === undefined || note === '' ? '' : ` · ${note}`,
   ].filter((part) => part !== '').join('')
-  return h('button', {
-    key: task.id,
-    type: 'button',
-    onClick: () => openTask(task.id),
-    'aria-label': `查看任务：${task.title}`,
-    'aria-current': selected ? 'true' : undefined,
-    style: { ...rowStyle, ...(selected ? rowSelectedStyle : {}) },
-  },
-  h(StatusDot, { tone: statusTone(task.status), size: 8, label: STATUS_LABEL[task.status] }),
-  h('div', { style: rowBodyStyle },
-    h('div', { style: titleStyle }, task.title),
-    h('div', { style: metaStyle }, meta),
-    h('div', { style: metaStyle }, taskMetricsView(task))),
-  h('div', { style: { display: 'flex', alignItems: 'center', gap: BUTLER_SPACE.xs, marginLeft: 'auto' } },
-    h(Pill, { tone: statusTone(task.status) }, STATUS_LABEL[task.status]),
-    h('span', { style: microStyle }, `最近 ${shortTime(task.updatedAt)}`)))
+  // Reminder tasks already carry their own delivery surface; one-click task
+  // bookkeeping must not appear to "complete" a scheduled reminder.
+  const actionable = taskActions !== undefined && task.kind !== 'reminder' && task.status !== 'done' && task.status !== 'cancelled'
+  return h('div', { key: task.id, style: { display: 'flex', alignItems: 'stretch', gap: BUTLER_SPACE.xs, minWidth: '0' } },
+    h('button', {
+      type: 'button',
+      onClick: () => openTask(task.id),
+      'aria-label': `查看任务：${task.title}`,
+      'aria-current': selected ? 'true' : undefined,
+      style: { ...rowStyle, ...(selected ? rowSelectedStyle : {}), flex: '1 1 auto', minWidth: '0' },
+    },
+    h(StatusDot, { tone: statusTone(task.status), size: 8, label: STATUS_LABEL[task.status] }),
+    h('div', { style: rowBodyStyle },
+      h('div', { style: titleStyle }, task.title),
+      h('div', { style: metaStyle }, meta),
+      h('div', { style: metaStyle }, taskMetricsView(task))),
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: BUTLER_SPACE.xs, marginLeft: 'auto' } },
+      h(Pill, { tone: statusTone(task.status) }, STATUS_LABEL[task.status]),
+      h('span', { style: microStyle }, `最近 ${shortTime(task.updatedAt)}`))),
+    actionable ? h('div', { style: { display: 'flex', alignItems: 'center', gap: BUTLER_SPACE.xs, flex: '0 0 auto' } },
+      h(Button, { size: 'sm', variant: 'ghost', ariaLabel: `完成任务：${task.title}`, onClick: () => taskActions('done', task) }, '完成'),
+      h(Button, { size: 'sm', variant: 'ghost', ariaLabel: `改期任务：${task.title}`, onClick: () => taskActions('postpone', task) }, '改期'),
+      h(Button, { size: 'sm', variant: 'ghost', ariaLabel: `取消任务：${task.title}`, onClick: () => taskActions('cancel', task) }, '取消')) : null)
 }
 
 /**
@@ -234,6 +247,8 @@ export interface TodayZoneProps {
   overview: Overview
   /** Open a task detail drawer. */
   openTask: (id: string) => void
+  /** One-click local bookkeeping on the owner's tasks. */
+  taskActions?: TaskActionHandler
   /** Task whose drawer is currently open. */
   selectedTaskId: string | null
 }
@@ -259,7 +274,7 @@ export function todayZone(props: TodayZoneProps): unknown {
     ? h(EmptyState, { title: '账本暂不可读', description: '待办与在跑的任务来自账本快照；账本恢复后会自动出现。' })
     : tasks.length === 0
       ? h(EmptyState, { title: '今天没有在跑的事', description: '跟我说要做什么就行。' })
-      : h('div', { style: groupStyle }, ...tasks.map(task => taskRow(task, props.openTask, task.id === props.selectedTaskId, operations))))
+      : h('div', { style: groupStyle }, ...tasks.map(task => taskRow(task, props.openTask, task.id === props.selectedTaskId, operations, props.taskActions))))
 }
 
 /* -------------------------------------------------------------------------- */
@@ -276,6 +291,8 @@ export interface DecisionsZoneProps {
   openApproval: (item: PendingItem) => void
   /** Open the snapshot drawer for an uncertain item that has no task id. */
   openNotice: (title: string, detail: string) => void
+  /** One-click local bookkeeping on the owner's tasks. */
+  taskActions?: TaskActionHandler
   selectedTaskId: string | null
 }
 
@@ -318,7 +335,7 @@ export function decisionsZone(props: DecisionsZoneProps): unknown {
   if (interrupted.length > 0) {
     groups.push(h('div', { style: groupStyle },
       h('h3', { style: heading3Style }, '重启打断 · 未自动重试'),
-      ...interrupted.map(task => taskRow(task, props.openTask, task.id === props.selectedTaskId, operations))))
+      ...interrupted.map(task => taskRow(task, props.openTask, task.id === props.selectedTaskId, operations, props.taskActions))))
   }
   if (pending.length > 0) {
     groups.push(h('div', { style: groupStyle },

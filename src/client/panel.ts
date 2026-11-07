@@ -35,7 +35,7 @@
 import { createElement as h, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import {
-  fetchNote, fetchOverview, fetchTask,
+  fetchNote, fetchOverview, fetchTask, taskAction,
   type Memo, type NoteEntry, type NoteResult, type Overview, type PendingItem, type TaskDetail,
 } from './api.ts'
 import { PANEL_ID } from './ids.ts'
@@ -47,9 +47,9 @@ import { taskDetailPane } from './workbench-details.ts'
 import { continueTaskWithButler, copyTaskContinuation, openTaskFile, openTaskSourceConversation, subscribeTaskFiles, taskFileSnapshot, type TaskActionOutcome } from './workbench-actions.ts'
 import {
   BUTLER_COLORS, BUTLER_SPACE,
-  ButlerStyles, Drawer, ErrorState, InlineError, KeyValue, LoadingBlock,
+  ButlerStyles, Drawer, ErrorState, InlineError, KeyValue, LoadingBlock, NoticeRegion, type NoticeItem,
 } from './ui/index.ts'
-import { decisionsZone, receiptRow, resourcesZone, systemZone, todayZone } from './workbench/zones.ts'
+import { decisionsZone, receiptRow, resourcesZone, systemZone, todayZone, type TaskActionHandler } from './workbench/zones.ts'
 import { workbenchStatusBar } from './workbench/status-bar.ts'
 
 /** Poll cadence while the seat is mounted (visible only; see the poll effect). */
@@ -83,6 +83,9 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
   const [openNotice, setOpenNotice] = useState<{ title: string; detail: string } | null>(null)
   const [taskAttempt, setTaskAttempt] = useState(0)
   const [noteAttempt, setNoteAttempt] = useState(0)
+  const [notices, setNotices] = useState<NoticeItem[]>([])
+  /** Reminder ids the owner already acknowledged in this dashboard session. */
+  const [dismissedDue, setDismissedDue] = useState<Record<string, true>>({})
   const loadVersion = useRef(0)
   const taskVisit = useRef(0)
   const fileAction = useSyncExternalStore(subscribeTaskFiles, taskFileSnapshot)
@@ -101,10 +104,31 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
     }
   }
 
+  /** Announce a completed/refused workbench action in the polite live region. */
+  const notify = (tone: NoticeItem['tone'], text: string): void => {
+    setNotices(previous => [...previous.slice(-2), { tone, text, at: Date.now() }])
+  }
+
+  /** One-click local bookkeeping; external actions never come through here. */
+  const applyTaskAction: TaskActionHandler = (action, task) => {
+    void (async () => {
+      try {
+        const result = await taskAction(action, task.id)
+        if (!result.ok) { notify('error', `操作失败：${result.error ?? '未知原因'}`); return }
+        notify('success', action === 'done' ? `已标记完成：${task.title}`
+          : action === 'cancel' ? `已取消：${task.title}` : `已改期：${task.title}`)
+        await load()
+      } catch (cause) {
+        notify('error', `操作失败：${cause instanceof Error ? cause.message : String(cause)}`)
+      }
+    })()
+  }
+
   useEffect(() => {
     const controller = new AbortController()
     void load(controller.signal)
-    // 15s 轮询只在界面可见时发请求；切回前台立刻补一次。
+    // 60s 轮询只在界面可见时发请求；切回前台立刻补一次。响应带 ETag，
+    // 内容没变时宿主直接 304，不重新渲染。
     const timer = window.setInterval(() => {
       if (documentHidden()) return
       void load(controller.signal)
@@ -248,6 +272,34 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
     : noteEntries.filter(entry => entry.path.toLowerCase().includes(noteFilter))
   const visibleNotes = filteredNotes.slice(0, noteLimit)
 
+  // Due reminders: the scheduler stores the rule, but the owner should see the
+  // due moment without opening the isolated reminder session. Acknowledgement is
+  // per dashboard session; a still-active rule reappears on the next load.
+  const dueReminders = (overview?.reminders ?? []).filter(record => record.status !== 'inactive'
+    && typeof record.scheduledAt === 'string' && Number.isFinite(Date.parse(record.scheduledAt))
+    && Date.parse(record.scheduledAt) <= Date.now() && dismissedDue[record.id] !== true)
+  const reminderBanner = dueReminders.length === 0 ? null : h('div', {
+    style: {
+      display: 'flex', flexDirection: 'column', gap: BUTLER_SPACE.xs,
+      padding: `${BUTLER_SPACE.sm} ${BUTLER_SPACE.md}`, borderRadius: '8px',
+      border: `1px solid ${BUTLER_COLORS.warn}`, background: BUTLER_COLORS.bgLayer1,
+    },
+  },
+  h('div', { style: { display: 'flex', alignItems: 'center', gap: BUTLER_SPACE.xs } },
+    h('strong', { style: { fontSize: '13px' } }, `到期提醒 ${dueReminders.length} 条`),
+    h('span', { style: { flex: '1 1 auto' } }),
+    h('button', { type: 'button', className: 'butler-btn butler-btn--secondary butler-btn--sm',
+      onClick: () => { void openButlerConversation(ctx, overview?.session?.id) } }, '打开管家会话处理')),
+  ...dueReminders.slice(0, 5).map((record, index) => h('div', {
+    key: record.id ?? index,
+    style: { display: 'flex', alignItems: 'center', gap: BUTLER_SPACE.xs, fontSize: '12px' },
+  },
+  h('span', { style: { flex: '1 1 auto', overflowWrap: 'anywhere' } },
+    `${record.title ?? record.prompt ?? record.id} · 计划 ${shortTime(record.scheduledAt as string)}`),
+  h('button', { type: 'button', className: 'butler-btn butler-btn--ghost butler-btn--sm',
+    'aria-label': `知道了：${record.title ?? record.id}`,
+    onClick: () => setDismissedDue(previous => ({ ...previous, [String(record.id)]: true })) }, '知道了'))))
+
   const body = overview === null
     ? error === null
       ? h('div', { style: { flex: '1 1 auto', minHeight: '0', padding: '16px' } },
@@ -262,8 +314,10 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
         }))
     : h('div', { className: 'butler-scroll', style: { flex: '1 1 auto', minHeight: '0', padding: '12px 16px' } },
       h('div', { className: 'butler-stack' },
-        todayZone({ overview, openTask: openTaskDetail, selectedTaskId: openTaskId }),
-        decisionsZone({ overview, openTask: openTaskDetail, openMemo: openMemoDetail, openApproval: openApprovalDetail, openNotice: openNoticeDetail, selectedTaskId: openTaskId }),
+        h(NoticeRegion, { notices }),
+        reminderBanner,
+        todayZone({ overview, openTask: openTaskDetail, selectedTaskId: openTaskId, taskActions: applyTaskAction }),
+        decisionsZone({ overview, openTask: openTaskDetail, openMemo: openMemoDetail, openApproval: openApprovalDetail, openNotice: openNoticeDetail, selectedTaskId: openTaskId, taskActions: applyTaskAction }),
         resourcesZone({
           overview,
           notes: visibleNotes,

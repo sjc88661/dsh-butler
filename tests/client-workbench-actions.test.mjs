@@ -15,9 +15,9 @@ const tasks = ['task-a-full-id', 'task-b-full-id'].map(id => ({ id, title: `Titl
   sessionId: `recorded-${id}`, usage: { calls: 0 }, execution: { available: false, reason: 'unknown' } }))
 const readySession = { id: 'current-butler-session', state: 'live', title: '管家', titlePinned: true,
   ready: { id: 'current-butler-session', canonicalCwd: 'E:/test/vault', workspaceId: 'ready-workspace', attached: true, flushed: true } }
-const overview = (generatedAt = at) => ({ ok: true, generatedAt, timeZone: 'Asia/Shanghai', session: readySession,
+const overview = (generatedAt = at, extra = {}) => ({ ok: true, generatedAt, timeZone: 'Asia/Shanghai', session: readySession,
   vault: { home: 'E:/test/vault', files: [] }, ledger: { open: tasks, interrupted: [], pending: [], recent: [] },
-  reminders: [], remindersAvailable: true, taskHistory: { total: tasks.length, tasks } })
+  reminders: [], remindersAvailable: true, taskHistory: { total: tasks.length, tasks }, ...extra })
 const detail = (task = tasks[0], artifacts = []) => ({ ok: true, generatedAt: at, task,
   usage: { calls: 0, withoutUsage: 0, totalTokens: 0, pricedCalls: 0, cost: 0 }, budgets: [], budgetHistory: [],
   receipts: [], receiptCount: 0, evidence: [], evidenceCount: 0, evidenceAvailable: true, artifacts, artifactCount: artifacts.length,
@@ -86,7 +86,15 @@ function carrier({ ctx = {}, clipboard } = {}) {
       window: { setInterval(callback) { const id = intervals.size + 1; intervals.set(id, callback); return id }, clearInterval(id) { intervals.delete(id) },
         setTimeout(callback, ms) { assert.ok(ms > 0 && ms <= 30000); const id = Math.random(); timeouts.set(id, callback); return id }, clearTimeout(id) { timeouts.delete(id) } },
       fetch(path, options = {}) {
-        assert.equal(options.method ?? 'GET', 'GET', 'Workbench actions must not send a command or mutate host state')
+        const method = options.method ?? 'GET'
+        // Exactly one mutation is allowed from the panel: the owner's own task
+        // bookkeeping. Everything else must stay a read.
+        if (path === '/dsh-butler/api/action') {
+          assert.equal(method, 'POST', 'Task bookkeeping must use POST')
+          assert.ok(typeof options.body === 'string' && options.body.length > 0)
+          return new Promise((resolve, reject) => requests.push({ path, method, body: JSON.parse(options.body), signal: options.signal, resolve, reject, replied: false }))
+        }
+        assert.equal(method, 'GET', 'Workbench actions must not send a command or mutate host state')
         assert.equal(options.body, undefined)
         return new Promise((resolve, reject) => requests.push({ path, signal: options.signal, resolve, reject, replied: false }))
       } }, { filename: file })
@@ -122,7 +130,7 @@ function carrier({ ctx = {}, clipboard } = {}) {
     },
     async openTask(value = detail()) { const request = await this.selectTask(tasks.findIndex(task => task.id === value.task.id)); reply(request, value); await flush() },
     async selectNote(slug) { nodes(tree).find(node => node.props?.['aria-label'] === `查看笔记：${slug}`).props.onClick(); await flush(); return latest(/\/note\?slug=/) },
-    async poll() { for (const callback of intervals.values()) callback(); reply(latest(/\/overview$/), overview(`${requests.length}`)); await flush() },
+    async poll(payload) { for (const callback of intervals.values()) callback(); reply(latest(/\/overview$/), payload ?? overview(`${requests.length}`)); await flush() },
     async mountHeader(onCommit) { mounted = true; dirty = true; commit = onCommit; component = load('src/client/header.ts').ButlerHeaderAction; await flush() },
     expireTimeouts() { for (const [id, callback] of [...timeouts]) { timeouts.delete(id); callback() } },
     disposePlugin() { for (const dispose of pluginDisposers.splice(0)) dispose?.() },
@@ -401,4 +409,36 @@ test('a native failure after handoff appears in its source header and when the o
   await e.openTask(detail(tasks[0], [{ path: file }]))
   assert.match(text(taskPane(e.tree)), /native viewer refused after mount/); assert.ok(text(taskPane(e.tree)).includes(file))
   e.unmount(); e.disposePlugin()
+})
+
+test('one-click task actions send exactly one local bookkeeping request and refresh the dashboard', async () => {
+  const e = carrier(); await e.mount()
+  const button = nodes(e.tree).find(node => node.props?.ariaLabel === `完成任务：${tasks[0].title}`)
+  assert.equal(typeof button?.props?.onClick, 'function', 'Open tasks offer one-click completion')
+  button.props.onClick(); await e.flush()
+
+  const actions = e.requests.filter(request => request.path === '/dsh-butler/api/action')
+  assert.equal(actions.length, 1)
+  assert.deepEqual(actions[0].body, { action: 'task-done', id: tasks[0].id })
+
+  e.reply(actions[0], { ok: true, action: 'task-done', task: { id: tasks[0].id, title: tasks[0].title, status: 'done', updatedAt: at } })
+  await e.flush()
+  const notices = nodes(e.tree).find(node => node.type?.name === 'NoticeRegion')?.props?.notices ?? []
+  assert.ok(notices.some(notice => String(notice.text).includes(`已标记完成：${tasks[0].title}`)), 'The action is announced in the live region')
+  const refreshed = e.latest(/\/overview$/)
+  assert.ok(refreshed, 'A successful action re-reads the dashboard instead of trusting local state')
+  e.reply(refreshed, overview(`${at}-refreshed`)); await e.flush()
+  assert.equal(e.requests.filter(request => request.path === '/dsh-butler/api/action').length, 1)
+})
+
+test('due reminders surface above the zones and can be acknowledged', async () => {
+  const e = carrier(); await e.mount()
+  const due = { id: 'reminder-due-1', title: '吃药', scheduledAt: '2026-10-21T11:00:00Z', status: 'active' }
+  await e.poll(overview(at, { reminders: [due] }))
+  assert.match(text(e.tree), /到期提醒 1 条/)
+  assert.match(text(e.tree), /吃药/)
+  const acknowledge = nodes(e.tree).find(node => node.props?.['aria-label'] === '知道了：吃药')
+  assert.equal(typeof acknowledge?.props?.onClick, 'function', 'Each due reminder can be acknowledged')
+  acknowledge.props.onClick(); await e.flush()
+  assert.doesNotMatch(text(e.tree), /到期提醒 1 条/, 'Acknowledged reminders leave the banner')
 })
