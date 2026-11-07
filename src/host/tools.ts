@@ -48,6 +48,7 @@ import {
   usageTotals,
 } from './ledger.ts'
 import { readPdfFile, readPdfTextCached, pageAnchors } from './pdf.ts'
+import { fetchPdfBytes } from './fetch-pdf.ts'
 import { findNotes, noteHistory, readNote, writeNote } from './notes.ts'
 import { searchLiterature, verifyRecords, type LiteratureRecord } from './literature.ts'
 import { exportLiterature } from './literature-export.ts'
@@ -544,10 +545,11 @@ export function registerButlerTools(
 
   add(defineTool({
     name: 'butler_pdf',
-    description: '收下一个 PDF：保存原件到 vault/uploads 并算 SHA256，然后读它的文本层。没有文本层（扫描件）会明确报告"无法解析，需要 OCR"，绝不假装读到了。',
+    description: '收下一个 PDF：保存原件到 vault/uploads 并算 SHA256，然后读它的文本层。没有文本层（扫描件）会明确报告"无法解析，需要 OCR"，绝不假装读到了。fetch 可直接抓公开 OA 链接（不登录、不绕付费墙），落地页/登录页会明确拒绝。',
     parameters: {
-      action: { type: 'string', required: true, enum: ['ingest', 'read'], description: 'ingest 保存原件并解析；read 只读已保存的原件。' },
+      action: { type: 'string', required: true, enum: ['ingest', 'read', 'fetch'], description: 'ingest 保存本地原件并解析；read 只读已保存的原件；fetch 抓取公开 PDF 链接后保存并解析。' },
       path: { type: 'string', description: 'PDF 的绝对路径（用户上传或本机文件）。' },
+      url: { type: 'string', description: 'fetch 用的公开 PDF 链接（http/https，开放获取）。' },
       taskId: { type: 'string', description: '关联的任务 id。' },
       pages: { type: 'array', items: { type: 'integer' }, description: 'read 指定真实物理页码；不指定默认返回前 3 页片段。' },
       fullText: { type: 'boolean', description: 'read 时请求全部可解析页；超出返回上限会明确降级。' },
@@ -563,24 +565,42 @@ export function registerButlerTools(
         // Borrowed services are re-resolved here, not frozen at activation:
         // one unlucky start order must not make the schedule service vanish.
         deps.ready?.()
+        const action = String(args['action'] ?? 'ingest')
         const source = String(args['path'] ?? '').trim()
-        if (source === '') throw new GuardRefusal('pdf.no_path', '需要 PDF 的绝对路径。')
+        const link = String(args['url'] ?? '').trim()
         let bytes: Uint8Array
-        try {
-          bytes = readPdfFile(source)
-        } catch (error) {
-          throw new GuardRefusal('pdf.unreadable', `读不到这个文件：${error instanceof Error ? error.message : String(error)}`)
+        let name: string
+        let origin: string
+        if (action === 'fetch') {
+          if (link === '') throw new GuardRefusal('pdf.no_url', 'fetch 需要公开 PDF 的 URL。')
+          let fetched
+          try {
+            fetched = await fetchPdfBytes(link)
+          } catch (error) {
+            throw new GuardRefusal('pdf.fetch_failed', `没有拿到全文：${error instanceof Error ? error.message : String(error)}`)
+          }
+          bytes = fetched.bytes
+          name = fetched.filename
+          origin = fetched.finalUrl
+        } else {
+          if (source === '') throw new GuardRefusal('pdf.no_path', '需要 PDF 的绝对路径。')
+          try {
+            bytes = readPdfFile(source)
+          } catch (error) {
+            throw new GuardRefusal('pdf.unreadable', `读不到这个文件：${error instanceof Error ? error.message : String(error)}`)
+          }
+          name = source.replace(/\\/g, '/').split('/').pop() ?? 'document.pdf'
+          origin = source
         }
         const requested = Array.isArray(args['pages']) ? args['pages'] as number[] : undefined
         const parsed = readPdfTextCached(bytes, { cacheDir: statePath('cache', 'pdf-text'), ...(requested ? { pages: requested } : {}) })
         const hash = sha256(bytes)
         let stored: string | undefined
-        if (args['action'] === 'ingest') {
-          const name = source.replace(/\\/g, '/').split('/').pop() ?? 'document.pdf'
+        if (action === 'ingest' || action === 'fetch') {
           const target = vaultPath('uploads', `${hash.slice(0, 12)}-${name}`)
           writeBytes(target, bytes)
           stored = target
-          appendDaily(deps.timeZone, `- [原件] ${name} → ${target} (sha256 ${hash.slice(0, 12)}…)`)
+          appendDaily(deps.timeZone, `- [原件] ${name} ← ${origin} → ${target} (sha256 ${hash.slice(0, 12)}…)`)
         }
         const selected = requested || args['fullText'] === true ? parsed.pages : parsed.pages.slice(0, 3)
         let remaining = 60000
@@ -595,7 +615,7 @@ export function registerButlerTools(
         return {
           ok: true,
           storedPath: stored ?? null,
-          sourcePath: stored ?? source,
+          sourcePath: stored ?? origin,
           sha256: hash,
           pages: parsed.declaredPages ?? parsed.pages.length,
           declaredPages: parsed.declaredPages ?? null,

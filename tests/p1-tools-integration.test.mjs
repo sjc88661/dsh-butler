@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { join, resolve } from 'node:path'
 
 const base = resolve('tests/.tmp')
@@ -211,4 +212,35 @@ test('an explicit PDF task target owns the actual file and receipt rather than t
   assert.equal(output.ok, true)
   assert.equal(e.evidence.resolve(output.evidenceIds, target.task.id)[0].taskId, target.task.id)
   assert.throws(() => e.evidence.resolve(output.evidenceIds, first.task.id))
+})
+
+test('butler_pdf fetch stores a real public PDF and refuses a landing page', async () => {
+  process.env.DSH_BUTLER_ALLOW_PRIVATE_FETCH = '1'
+  const pdf = fourPagePdf()
+  const server = createServer((request, response) => {
+    if (request.url === '/paper.pdf') {
+      response.writeHead(200, { 'content-type': 'application/pdf', 'content-length': pdf.length })
+      response.end(pdf)
+    } else {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      response.end('<html><body>sign in to continue</body></html>')
+    }
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const origin = `http://127.0.0.1:${server.address().port}`
+  try {
+    const e = environment()
+    const fetched = await e.call('butler_pdf', { action: 'fetch', url: `${origin}/paper.pdf` })
+    assert.equal(fetched.ok, true, JSON.stringify(fetched))
+    assert.match(fetched.storedPath, /\.pdf$/)
+    assert.equal(fetched.textLayer, true)
+    assert.ok(fetched.pages >= 4)
+
+    const landing = await e.call('butler_pdf', { action: 'fetch', url: `${origin}/landing` })
+    assert.equal(landing.ok, false)
+    assert.match(JSON.stringify(landing), /不是 PDF/)
+  } finally {
+    delete process.env.DSH_BUTLER_ALLOW_PRIVATE_FETCH
+    server.close()
+  }
 })
