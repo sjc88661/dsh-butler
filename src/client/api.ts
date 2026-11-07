@@ -214,6 +214,42 @@ export interface DueReminderPayload {
   reason?: string
 }
 
+/** One memory-proposal decision the workbench may record. */
+export type MemoActionName = 'confirm' | 'reject'
+
+/** What one memo decision changed. */
+export interface MemoActionResult {
+  ok: boolean
+  action?: string
+  memo?: { id: string; status: string; text: string }
+  error?: string
+}
+
+/**
+ * Confirm or reject one proposed memory entry.
+ *
+ * This records the same durable decision the conversation memory tool records;
+ * the host writes an operation id so the provenance stays auditable.
+ * @param action - confirm or reject.
+ * @param id - memo id.
+ * @param signal - abort signal for the caller's lifetime.
+ * @returns the decided memo, or the host's refusal reason.
+ */
+export async function memoAction(action: MemoActionName, id: string, signal?: AbortSignal): Promise<MemoActionResult> {
+  const response = await fetch(`${API_PREFIX}/memo-action`, {
+    method: 'POST', signal,
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ action, id }),
+  })
+  let payload: unknown
+  try { payload = await response.json() } catch { payload = undefined }
+  const record = payload !== null && typeof payload === 'object' ? payload as Record<string, unknown> : undefined
+  if (!response.ok || record?.['ok'] !== true) {
+    return { ok: false, error: typeof record?.['error'] === 'string' ? record['error'] : `HTTP ${response.status}` }
+  }
+  return record as unknown as MemoActionResult
+}
+
 /** One reminder rule change the overlay/banner may request. */
 export type ReminderActionName = 'snooze' | 'reschedule' | 'complete' | 'cancel' | 'pause' | 'resume'
 

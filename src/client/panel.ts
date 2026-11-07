@@ -35,7 +35,7 @@
 import { createElement as h, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import {
-  fetchNote, fetchOverview, fetchTask, reminderAction, taskAction,
+  fetchNote, fetchOverview, fetchTask, memoAction, reminderAction, taskAction,
   type Memo, type NoteEntry, type NoteResult, type Overview, type PendingItem, type ReminderRecord, type TaskDetail,
 } from './api.ts'
 import { PANEL_ID } from './ids.ts'
@@ -133,6 +133,19 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
         setDismissedDue(previous => ({ ...previous, [String(record.id)]: true }))
         await load()
       } catch (cause) { notify('error', `提醒操作失败：${cause instanceof Error ? cause.message : String(cause)}`) }
+    })()
+  }
+
+  /** Confirm/reject a proposed memory; the same durable decision as the chat tool. */
+  const applyMemoAction = (memo: Memo, action: 'confirm' | 'reject'): void => {
+    void (async () => {
+      try {
+        const result = await memoAction(action, memo.id)
+        if (!result.ok) { notify('error', `记忆操作失败：${result.error ?? '未知原因'}`); return }
+        notify('success', action === 'confirm' ? `已记住：${memo.text}` : '已拒绝这条记忆提案')
+        setOpenMemo(null)
+        await load()
+      } catch (cause) { notify('error', `记忆操作失败：${cause instanceof Error ? cause.message : String(cause)}`) }
     })()
   }
 
@@ -462,7 +475,12 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
     h(KeyValue, { label: '来源', value: openMemo.source === 'user' ? '你的明确输入' : '管家提出' }),
     h(KeyValue, { label: '创建', value: shortTime(openMemo.createdAt) }),
     h(KeyValue, { label: '状态', value: '待确认', tone: 'warn' }),
-    h('p', { className: 'butler-muted', style: { margin: '0' } }, '确认、更正与撤回通过对话的记忆工具处理，沿用可信用户确认。')))
+    h('div', { style: { display: 'flex', gap: BUTLER_SPACE.xs, flexWrap: 'wrap' } },
+      h('button', { type: 'button', className: 'butler-btn butler-btn--primary butler-btn--sm', 'aria-label': '确认记忆提案',
+        onClick: () => applyMemoAction(openMemo, 'confirm') }, '确认记住'),
+      h('button', { type: 'button', className: 'butler-btn butler-btn--secondary butler-btn--sm', 'aria-label': '拒绝记忆提案',
+        onClick: () => applyMemoAction(openMemo, 'reject') }, '拒绝')),
+    h('p', { className: 'butler-muted', style: { margin: '0' } }, '确认/拒绝会写入同一份记忆记录（与对话里的记忆工具一致）；拒绝不会进入画像。')))
 
   const approvalDrawer = openApproval === null ? null : h(Drawer, {
     open: true,

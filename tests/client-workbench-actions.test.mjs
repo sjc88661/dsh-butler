@@ -89,7 +89,7 @@ function carrier({ ctx = {}, clipboard } = {}) {
         const method = options.method ?? 'GET'
         // Exactly one mutation is allowed from the panel: the owner's own task
         // bookkeeping. Everything else must stay a read.
-        if (path === '/dsh-butler/api/action' || path === '/dsh-butler/api/reminder-action') {
+        if (path === '/dsh-butler/api/action' || path === '/dsh-butler/api/reminder-action' || path === '/dsh-butler/api/memo-action') {
           assert.equal(method, 'POST', 'Task bookkeeping must use POST')
           assert.ok(typeof options.body === 'string' && options.body.length > 0)
           return new Promise((resolve, reject) => requests.push({ path, method, body: JSON.parse(options.body), signal: options.signal, resolve, reject, replied: false }))
@@ -460,4 +460,27 @@ test('a due reminder in the banner can be snoozed or completed through the remin
   assert.ok(refreshed, 'A successful reminder action re-reads the dashboard')
   e.reply(refreshed, overview(`${at}-reminder-refreshed`, { reminders: [] })); await e.flush()
   assert.doesNotMatch(text(e.tree), /到期提醒 1 条/)
+})
+
+test('a proposed memory can be confirmed from the workbench drawer and refreshes the dashboard', async () => {
+  const e = carrier(); await e.mount()
+  const memo = { id: 'memo-proposed-1', text: '偏好中文交流', source: 'butler', createdAt: at, status: 'proposed' }
+  await e.poll(overview(at, { ledger: { open: tasks, interrupted: [], pending: [], recent: [], proposedMemos: [memo] } }))
+  const row = nodes(e.tree).find(node => node.props?.['aria-label'] === '查看记忆提案：偏好中文交流')
+  assert.equal(typeof row?.props?.onClick, 'function', 'A proposed memory shows in the decisions zone')
+  row.props.onClick(); await e.flush()
+  const confirm = nodes(e.tree).find(node => node.props?.['aria-label'] === '确认记忆提案')
+  assert.equal(typeof confirm?.props?.onClick, 'function', 'The memo drawer offers a direct confirmation')
+  confirm.props.onClick(); await e.flush()
+
+  const actions = e.requests.filter(request => request.path === '/dsh-butler/api/memo-action')
+  assert.equal(actions.length, 1)
+  assert.deepEqual(actions[0].body, { action: 'confirm', id: 'memo-proposed-1' })
+  e.reply(actions[0], { ok: true, action: 'confirm', memo: { id: memo.id, status: 'confirmed', text: memo.text } })
+  await e.flush()
+  const notices = nodes(e.tree).find(node => node.type?.name === 'NoticeRegion')?.props?.notices ?? []
+  assert.ok(notices.some(notice => String(notice.text).includes('已记住')), 'The decision is announced')
+  const refreshed = e.latest(/\/overview$/)
+  assert.ok(refreshed, 'A confirmed memory re-reads the dashboard')
+  e.reply(refreshed, overview(`${at}-memo-refreshed`, { ledger: { open: tasks, interrupted: [], pending: [], recent: [], proposedMemos: [] } })); await e.flush()
 })

@@ -57,7 +57,8 @@
 
 - [x] **OA 全文抓取**：`butler_pdf action=fetch url=...` 直接抓公开 PDF（http/https、30MB/30s 上限、内网默认拒绝、落地页/登录页明确拒绝），保存原件到 `vault/uploads` 并读文本层；本地 `ingest` 原路径不变
 - [ ] 按页笔记 → 引用导出（`butler_pdf read pages` + `butler_note` 已具备原料，下一步串成流程/模板）
-- [ ] 主题记忆提炼 + 待批/更正/撤回 UI；Zotero 只读来源
+- [x] **记忆待批 UI**：工作台"等你决定 · 记忆提案"抽屉里可直接「确认记住 / 拒绝」，走 `POST /api/memo-action`（与对话记忆工具同一份 durable decision，带 operationId 审计；已处理返回 409）；确认/拒绝后刷新工作台
+- [ ] 主题记忆提炼（Agent 主动提出提案）+ 更正/撤回 UI；Zotero 只读来源
 - [ ] 随手捕获（`conversation.chat.assistant-actions`：记待办/设提醒/存笔记）
 - [ ] 全局搜索（笔记/记忆/任务/来源）
 

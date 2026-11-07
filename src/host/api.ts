@@ -24,7 +24,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { ButlerContext, ButlerReminderSummary, ScheduleCatalogEntry, ScheduleService, ScheduleDeliveryReceipt } from './ctx.ts'
 import { projectReminder } from './remind.ts'
 import type { UsageBackfillState } from './backfill.ts'
-import { getTask, listTasks, receipts, setButlerSessionId, setTaskStatus, snapshot, upsertTask, usageRecords, usageTotals } from './ledger.ts'
+import { decideMemo, getTask, listMemos, listTasks, receipts, setButlerSessionId, setTaskStatus, snapshot, upsertTask, usageRecords, usageTotals } from './ledger.ts'
 import { EvidenceStore } from './evidence-store.ts'
 import { storageStatus } from './store.ts'
 import { archivedReminderKeys, archivedTaskIds } from './archive.ts'
@@ -716,6 +716,35 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
           sendJson(res, 200, { ok: true, action, scheduleId: id, schedule: record, task: task === null ? null : {
             id: (task as { id: string }).id, title: (task as { title: string }).title, status: (task as { status: string }).status,
           } })
+        } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
+      },
+    }),
+    server.register({
+      // Memory proposals are the owner's own decisions; approving from the
+      // workbench is the same durable decision the conversation tool records,
+      // with an operation id so "who confirmed this memory" stays auditable.
+      kind: 'exact',
+      path: `${API_PREFIX}/memo-action`,
+      handler: async (req, res) => {
+        if ((req.method ?? 'GET').toUpperCase() !== 'POST') { sendJson(res, 405, { ok: false, error: '记忆操作只支持 POST' }); return }
+        let raw: unknown
+        try { raw = JSON.parse(await readBody(req)) } catch (error) {
+          sendJson(res, 400, { ok: false, error: `请求体不是有效 JSON：${errorText(error)}` }); return
+        }
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) { sendJson(res, 400, { ok: false, error: '请求体必须是对象' }); return }
+        const body = raw as Record<string, unknown>
+        const action = typeof body.action === 'string' ? body.action : ''
+        const id = typeof body.id === 'string' ? body.id.trim() : ''
+        if (action !== 'confirm' && action !== 'reject') { sendJson(res, 400, { ok: false, error: `不支持的记忆操作：${action || '(空)'}` }); return }
+        if (id === '' || id.length > 256) { sendJson(res, 400, { ok: false, error: '记忆提案 ID 无效' }); return }
+        try {
+          const existing = listMemos(READ_ONLY).find(memo => memo.id === id)
+          if (existing === undefined) { sendJson(res, 404, { ok: false, error: '没有这条记忆提案' }); return }
+          if (existing.status !== 'proposed') { sendJson(res, 409, { ok: false, error: `这条记忆提案已是 ${existing.status}，不再重复处理。` }); return }
+          const decided = decideMemo(id, action === 'confirm' ? 'confirmed' : 'rejected',
+            { operationId: `web-memo-${action}-${id}-${randomUUID()}` })
+          if (decided === undefined) { sendJson(res, 404, { ok: false, error: '没有这条记忆提案' }); return }
+          sendJson(res, 200, { ok: true, action, memo: { id: decided.id, status: decided.status, text: decided.text } })
         } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
       },
     }),

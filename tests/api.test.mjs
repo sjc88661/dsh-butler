@@ -11,7 +11,7 @@ process.env.DSH_BUTLER_VAULT = join(home, 'vault')
 process.env.DSH_BUTLER_HOME = join(home, 'state')
 const { ensureVault, vaultPath, statePath, sha256 } = await import('../src/host/vault.ts')
 const { registerButlerApi } = await import('../src/host/api.ts')
-const { upsertTask, addReceipt, addUsage, addUsageBatch, listTasks } = await import('../src/host/ledger.ts')
+const { upsertTask, addReceipt, addUsage, addUsageBatch, listTasks, addMemo, listMemos } = await import('../src/host/ledger.ts')
 const { EvidenceStore } = await import('../src/host/evidence-store.ts')
 const { TaskBudgets } = await import('../src/host/budget.ts')
 const { ReminderOperations } = await import('../src/host/reminder-operations.ts')
@@ -691,4 +691,27 @@ test('overview exposes feishu reminder status only when the host provides it', a
   try {
     assert.equal((await absent.request('/dsh-butler/api/overview')).body.feishu, undefined)
   } finally { absent.dispose() }
+})
+
+test('memo action route confirms/rejects proposed memories once with audit and clear refusals', async () => {
+  const confirmId = `memo-confirm-${randomUUID()}`
+  addMemo({ id: confirmId, text: '偏好中文交流', source: 'butler' })
+  const rejectId = `memo-reject-${randomUUID()}`
+  addMemo({ id: rejectId, text: '每天喝咖啡', source: 'butler' })
+  const e = api()
+  try {
+    const confirmed = await e.request('/dsh-butler/api/memo-action', 'POST', { action: 'confirm', id: confirmId })
+    assert.equal(confirmed.status, 200)
+    assert.equal(confirmed.body.memo.status, 'confirmed')
+    assert.equal(listMemos().find(memo => memo.id === confirmId).status, 'confirmed')
+
+    const rejected = await e.request('/dsh-butler/api/memo-action', 'POST', { action: 'reject', id: rejectId })
+    assert.equal(rejected.status, 200)
+    assert.equal(rejected.body.memo.status, 'rejected')
+
+    assert.equal((await e.request('/dsh-butler/api/memo-action', 'POST', { action: 'confirm', id: confirmId })).status, 409)
+    assert.equal((await e.request('/dsh-butler/api/memo-action', 'POST', { action: 'confirm', id: 'missing-memo' })).status, 404)
+    assert.equal((await e.request('/dsh-butler/api/memo-action', 'POST', { action: 'explode', id: confirmId })).status, 400)
+    assert.equal((await e.request('/dsh-butler/api/memo-action', 'GET')).status, 405)
+  } finally { e.dispose() }
 })
