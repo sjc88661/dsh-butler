@@ -61,7 +61,8 @@
 - [x] **记忆待批 UI**：工作台"等你决定 · 记忆提案"抽屉里可直接「确认记住 / 拒绝」，走 `POST /api/memo-action`（与对话记忆工具同一份 durable decision，带 operationId 审计；已处理返回 409）；确认/拒绝后刷新工作台
 - [ ] 主题记忆提炼（Agent 主动提出提案）+ 更正/撤回 UI；Zotero 只读来源
 - [x] **全局搜索**：工作台顶部一个输入框查笔记/任务/记忆；`GET /api/search?q=`（按组上限 8、可传 limit、显式 truncated、超大笔记跳过、片段居中）；点笔记/任务命中打开对应抽屉，记忆命中显示片段
-- [ ] 随手捕获（`conversation.chat.assistant-actions`：记待办/设提醒/存笔记）
+- [x] **随手捕获**：工作台「随手记成待办…」输入框 → `POST /api/capture` 直接写 pending 任务（operationId 审计、内容 1..200 字、可选 note）；成功提示并刷新；同页提供全局搜索
+- [x] **简报用量行**：早报报昨日、晚报报今日的调用次数/tokens/估算费用/未计价次数（来自账本 usage）
 - [ ] Zotero 只读来源
 
 ### P3 跨端与运维

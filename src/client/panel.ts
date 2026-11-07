@@ -35,7 +35,7 @@
 import { createElement as h, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import {
-  fetchNote, fetchOverview, fetchTask, memoAction, reminderAction, searchButler, taskAction,
+  captureTask, fetchNote, fetchOverview, fetchTask, memoAction, reminderAction, searchButler, taskAction,
   type Memo, type NoteEntry, type NoteResult, type Overview, type PendingItem, type ReminderRecord, type SearchPayload, type TaskDetail,
 } from './api.ts'
 import { PANEL_ID } from './ids.ts'
@@ -90,6 +90,7 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
   const [searchResult, setSearchResult] = useState<SearchPayload | null>(null)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searching, setSearching] = useState(false)
+  const [captureText, setCaptureText] = useState('')
   const loadVersion = useRef(0)
   const taskVisit = useRef(0)
   const fileAction = useSyncExternalStore(subscribeTaskFiles, taskFileSnapshot)
@@ -166,6 +167,18 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
       setSearchError(cause instanceof Error ? cause.message : String(cause))
       setSearching(false)
     })
+  }
+
+  /** Capture one quick thought as a pending task. */
+  const capture = (): void => {
+    const title = captureText.trim()
+    if (title === '') return
+    void captureTask(title).then(result => {
+      if (!result.ok) { notify('error', `捕获失败：${result.error ?? '未知原因'}`); return }
+      notify('success', `已记为待办：${title}`)
+      setCaptureText('')
+      void load()
+    }, cause => notify('error', `捕获失败：${cause instanceof Error ? cause.message : String(cause)}`))
   }
 
   useEffect(() => {
@@ -391,6 +404,20 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
     h('span', { style: { fontSize: '13px', lineHeight: '20px' } }, `${searchKindLabel[hit.kind]} · ${hit.title}`),
     h('span', { style: { fontSize: '12px', lineHeight: '18px', color: BUTLER_COLORS.labelSecondary } }, hit.snippet)))))
 
+  // Quick capture: a thought becomes a real pending task in one submit.
+  const captureBar = h('form', {
+    onSubmit: (event: { preventDefault(): void }) => { event.preventDefault(); capture() },
+    style: { display: 'flex', gap: BUTLER_SPACE.xs, alignItems: 'center' },
+  },
+  h('input', {
+    type: 'text', value: captureText, 'aria-label': '捕获内容（记成待办）', placeholder: '随手记成待办…',
+    onChange: (event: { target: { value: string } }) => setCaptureText(event.target.value),
+    style: { flex: '1 1 auto', minWidth: '0', padding: '6px 10px', borderRadius: '6px',
+      border: `1px solid ${BUTLER_COLORS.borderL1}`, background: BUTLER_COLORS.bgLayer1,
+      color: BUTLER_COLORS.labelPrimary, fontSize: '13px' },
+  }),
+  h('button', { type: 'submit', className: 'butler-btn butler-btn--secondary butler-btn--sm' }, '记成待办'))
+
   const body = overview === null
     ? error === null
       ? h('div', { style: { flex: '1 1 auto', minHeight: '0', padding: '16px' } },
@@ -409,6 +436,7 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
         reminderBanner,
         searchBar,
         searchPanel,
+        captureBar,
         todayZone({ overview, openTask: openTaskDetail, selectedTaskId: openTaskId, taskActions: applyTaskAction }),
         decisionsZone({ overview, openTask: openTaskDetail, openMemo: openMemoDetail, openApproval: openApprovalDetail, openNotice: openNoticeDetail, selectedTaskId: openTaskId, taskActions: applyTaskAction }),
         resourcesZone({

@@ -767,6 +767,32 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
       },
     }),
     server.register({
+      // One-click capture: turn a quick thought into a real pending task. Local
+      // bookkeeping only; the workbench and daily page both see it immediately.
+      kind: 'exact',
+      path: `${API_PREFIX}/capture`,
+      handler: async (req, res) => {
+        if ((req.method ?? 'GET').toUpperCase() !== 'POST') { sendJson(res, 405, { ok: false, error: '捕获只支持 POST' }); return }
+        let raw: unknown
+        try { raw = JSON.parse(await readBody(req)) } catch (error) {
+          sendJson(res, 400, { ok: false, error: `请求体不是有效 JSON：${errorText(error)}` }); return
+        }
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) { sendJson(res, 400, { ok: false, error: '请求体必须是对象' }); return }
+        const body = raw as Record<string, unknown>
+        const title = typeof body.title === 'string' ? body.title.trim() : ''
+        if (title === '') { sendJson(res, 400, { ok: false, error: '捕获内容不能为空' }); return }
+        if (title.length > 200) { sendJson(res, 400, { ok: false, error: '捕获内容过长（上限 200 字）' }); return }
+        const note = typeof body.note === 'string' && body.note.trim() !== '' ? body.note.trim().slice(0, 2000) : undefined
+        try {
+          const id = `task-${randomUUID()}`
+          const task = upsertTask(id, { title, status: 'pending', ...(note === undefined ? {} : { note }) },
+            { operationId: `web-capture-${id}`, time: new Date().toISOString() })
+          if (task === undefined) { sendJson(res, 503, { ok: false, error: '任务没有写入账本' }); return }
+          sendJson(res, 200, { ok: true, task: { id: task.id, title: task.title, status: task.status, createdAt: task.createdAt, updatedAt: task.updatedAt } })
+        } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
+      },
+    }),
+    server.register({
       kind: 'exact',
       path: `${API_PREFIX}/history`,
       handler: (req, res) => {

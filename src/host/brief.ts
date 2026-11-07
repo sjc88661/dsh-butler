@@ -12,7 +12,7 @@
  *
  * @module @dsh-external/dsh-butler/host/brief
  */
-import { appendDaily, listTasks, readDaily, type TaskStatus } from './ledger.ts'
+import { appendDaily, listTasks, readDaily, usageRecords, type TaskStatus } from './ledger.ts'
 import { archivedReminderKeys, archivedTaskIds } from './archive.ts'
 import { localDate } from './vault.ts'
 
@@ -53,12 +53,22 @@ export interface BriefReminder {
   status?: string
 }
 
+/** One day of token usage, as the brief states it. */
+export interface BriefUsage {
+  calls: number
+  totalTokens: number
+  cost: number
+  unpriced: number
+}
+
 /** Everything one brief is composed from. */
 export interface BriefSource {
   now: Date
   timeZone: string
   tasks: BriefTask[]
   reminders: BriefReminder[]
+  /** Today/yesterday usage; morning reports yesterday, evening reports today. */
+  usage?: { today: BriefUsage; yesterday: BriefUsage }
 }
 
 /** What one composed brief contains. */
@@ -148,6 +158,8 @@ export function composeBrief(kind: BriefKind, source: BriefSource): Brief {
   const weekday = localClock(source.now, source.timeZone).weekday
   const lines: string[] = [`- 日期：${today}（${weekday}）`]
   const suggestions: string[] = []
+  const usage = source.usage === undefined ? undefined
+    : kind === 'morning' ? { label: '昨日', ...source.usage.yesterday } : { label: '今日', ...source.usage.today }
 
   if (kind === 'morning') {
     lines.push(`- 今天到期：${counts.dueToday === 0 ? '无' : `${counts.dueToday} 项 — ${titles(dueToday)}`}`)
@@ -169,6 +181,10 @@ export function composeBrief(kind: BriefKind, source: BriefSource): Brief {
     if (suggestions.length === 0) suggestions.push('今天没有必须收尾的事：早点休息，明天再推。')
   }
   lines.push(`- 建议：${suggestions.join(' ')}`)
+  if (usage !== undefined) {
+    lines.push(`- 用量（${usage.label}）：${usage.calls === 0 ? '无调用'
+      : `${usage.calls} 次调用 / ${usage.totalTokens.toLocaleString('en-US')} tokens / 估算 ¥${usage.cost.toFixed(2)}${usage.unpriced === 0 ? '' : `（${usage.unpriced} 次未计价）`}`}`)
+  }
   const markdown = `\n## ${slot.heading}\n\n${lines.join('\n')}\n`
   return { kind, heading: slot.heading, markdown, counts }
 }
@@ -268,11 +284,30 @@ export function installDailyBrief(options: DailyBriefOptions): () => void {
  * @param schedule - live schedule catalog accessor, if available.
  * @returns tasks and projected reminders.
  */
-export async function collectBriefSource(schedule?: { catalog(): Promise<Array<{ id?: string; title?: string; scheduledAt?: string; status?: string }>> }): Promise<{ tasks: BriefTask[]; reminders: BriefReminder[] }> {
+export async function collectBriefSource(schedule?: { catalog(): Promise<Array<{ id?: string; title?: string; scheduledAt?: string; status?: string }>> },
+  options: { timeZone?: string; now?: Date } = {}): Promise<{ tasks: BriefTask[]; reminders: BriefReminder[]; usage: { today: BriefUsage; yesterday: BriefUsage } }> {
   // Archived October fixtures stay in the ledger as evidence but never enter the
   // owner's brief: it is a "what needs me today" page, not a test report.
   const hiddenTasks = archivedTaskIds()
   const hiddenReminders = archivedReminderKeys()
+  const timeZone = options.timeZone ?? 'Asia/Shanghai'
+  const now = options.now ?? new Date()
+  const today = localDate(now, timeZone)
+  const yesterday = localDate(new Date(now.getTime() - 86_400_000), timeZone)
+  const aggregate = (date: string): BriefUsage => {
+    let calls = 0
+    let totalTokens = 0
+    let cost = 0
+    let unpriced = 0
+    for (const row of usageRecords()) {
+      if (localDate(new Date(row.at), timeZone) !== date) continue
+      calls += 1
+      totalTokens += row.totalTokens ?? ((row.inputTokens ?? 0) + (row.outputTokens ?? 0))
+      cost += row.cost ?? 0
+      if (row.cost === undefined) unpriced += 1
+    }
+    return { calls, totalTokens, cost, unpriced }
+  }
   const tasks: BriefTask[] = listTasks({ recover: false }).filter(task => !hiddenTasks.has(task.id)).map(task => ({
     id: task.id, title: task.title, status: task.status,
     ...(task.kind === undefined ? {} : { kind: task.kind }),
@@ -287,5 +322,5 @@ export async function collectBriefSource(schedule?: { catalog(): Promise<Array<{
       ...(row.status === undefined ? {} : { status: row.status }),
     }))
   } catch { /* an unavailable scheduler means the brief simply has no reminder lines */ }
-  return { tasks, reminders }
+  return { tasks, reminders, usage: { today: aggregate(today), yesterday: aggregate(yesterday) } }
 }

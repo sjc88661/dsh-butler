@@ -734,3 +734,19 @@ test('search route returns grouped read-only hits and validates the query', asyn
     assert.equal((await e.request('/dsh-butler/api/search?q=enzyme', 'POST')).status, 405)
   } finally { e.dispose() }
 })
+
+test('capture route records one pending task and validates input', async () => {
+  const e = api()
+  try {
+    const before = listTasks().length
+    const created = await e.request('/dsh-butler/api/capture', 'POST', { title: '买试剂', note: '酶活实验用' })
+    assert.equal(created.status, 200)
+    assert.equal(created.body.ok, true)
+    assert.equal(created.body.task.status, 'pending')
+    assert.equal(listTasks().length, before + 1)
+    assert.equal(listTasks().find(task => task.id === created.body.task.id).note, '酶活实验用')
+    assert.equal((await e.request('/dsh-butler/api/capture', 'POST', { title: '   ' })).status, 400)
+    assert.equal((await e.request('/dsh-butler/api/capture', 'POST', { title: 'x'.repeat(201) })).status, 400)
+    assert.equal((await e.request('/dsh-butler/api/capture', 'GET')).status, 405)
+  } finally { e.dispose() }
+})

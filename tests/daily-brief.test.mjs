@@ -149,3 +149,14 @@ test('collectBriefSource hides archived fixture tasks from the owner brief', asy
   assert.ok(source.tasks.some(row => row.id === 'task-real-one'))
   assert.ok(!source.tasks.some(row => row.id === 'task-fixture-archive'))
 })
+
+test('the brief states token usage: morning reports yesterday, evening reports today', () => {
+  const usage = { today: { calls: 3, totalTokens: 12000, cost: 0.42, unpriced: 1 }, yesterday: { calls: 7, totalTokens: 30000, cost: 1.5, unpriced: 0 } }
+  const morning = brief.composeBrief('morning', { now: at(9), timeZone: zone, tasks: [], reminders: [], usage })
+  assert.match(morning.markdown, /- 用量（昨日）：7 次调用 \/ 30,000 tokens \/ 估算 ¥1\.50/)
+  assert.doesNotMatch(morning.markdown, /未计价/)
+  const evening = brief.composeBrief('evening', { now: at(21, 35), timeZone: zone, tasks: [], reminders: [], usage })
+  assert.match(evening.markdown, /- 用量（今日）：3 次调用 \/ 12,000 tokens \/ 估算 ¥0\.42（1 次未计价）/)
+  const empty = brief.composeBrief('morning', { now: at(9), timeZone: zone, tasks: [], reminders: [], usage: { today: { calls: 0, totalTokens: 0, cost: 0, unpriced: 0 }, yesterday: { calls: 0, totalTokens: 0, cost: 0, unpriced: 0 } } })
+  assert.match(empty.markdown, /- 用量（昨日）：无调用/)
+})

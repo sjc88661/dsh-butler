@@ -194,6 +194,35 @@ async function getJson(path: string, signal?: AbortSignal): Promise<unknown> {
   return value
 }
 
+/** What one quick capture wrote. */
+export interface CaptureResult {
+  ok: boolean
+  task?: { id: string; title: string; status: string; createdAt: string; updatedAt: string }
+  error?: string
+}
+
+/**
+ * Capture one quick thought as a pending task.
+ * @param title - what to do (1..200 chars).
+ * @param note - optional extra context.
+ * @param signal - abort signal for the caller's lifetime.
+ * @returns the created task or the host's refusal.
+ */
+export async function captureTask(title: string, note?: string, signal?: AbortSignal): Promise<CaptureResult> {
+  const response = await fetch(`${API_PREFIX}/capture`, {
+    method: 'POST', signal,
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ title, ...(note === undefined || note.trim() === '' ? {} : { note }) }),
+  })
+  let payload: unknown
+  try { payload = await response.json() } catch { payload = undefined }
+  const record = payload !== null && typeof payload === 'object' ? payload as Record<string, unknown> : undefined
+  if (!response.ok || record?.['ok'] !== true) {
+    return { ok: false, error: typeof record?.['error'] === 'string' ? record['error'] : `HTTP ${response.status}` }
+  }
+  return record as unknown as CaptureResult
+}
+
 /** One global-search hit. */
 export interface SearchHit {
   kind: 'note' | 'task' | 'memory'

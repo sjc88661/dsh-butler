@@ -508,10 +508,10 @@ export function apply(ctx: AppContext, config: Config): void {
   ctx.effect(() => installDailyBrief({
     timeZone: config.timeZone,
     logger: ctx.logger,
-    collect: () => collectBriefSource((() => {
+    collect: async () => collectBriefSource((() => {
       const live = services.schedule.get()
       return live === undefined ? undefined : { catalog: () => live.catalog() }
-    })()),
+    })(), { timeZone: config.timeZone }),
   }), 'butler: daily briefs')
 
   // Feishu self-reminder push (optional). The sender only talks to the public

@@ -89,7 +89,7 @@ function carrier({ ctx = {}, clipboard } = {}) {
         const method = options.method ?? 'GET'
         // Exactly one mutation is allowed from the panel: the owner's own task
         // bookkeeping. Everything else must stay a read.
-        if (path === '/dsh-butler/api/action' || path === '/dsh-butler/api/reminder-action' || path === '/dsh-butler/api/memo-action') {
+        if (path === '/dsh-butler/api/action' || path === '/dsh-butler/api/reminder-action' || path === '/dsh-butler/api/memo-action' || path === '/dsh-butler/api/capture') {
           assert.equal(method, 'POST', 'Task bookkeeping must use POST')
           assert.ok(typeof options.body === 'string' && options.body.length > 0)
           return new Promise((resolve, reject) => requests.push({ path, method, body: JSON.parse(options.body), signal: options.signal, resolve, reject, replied: false }))
@@ -501,4 +501,24 @@ test('global search asks the host and opens the selected note result', async () 
   assert.equal(typeof hit?.props?.onClick, 'function', 'Search hits are clickable')
   hit.props.onClick(); await e.flush()
   assert.ok(e.latest(/\/note\?slug=alpha/), 'A note hit opens the note drawer')
+})
+
+test('quick capture turns one typed thought into a pending task and refreshes', async () => {
+  const e = carrier(); await e.mount()
+  const input = nodes(e.tree).find(node => node.props?.['aria-label'] === '捕获内容（记成待办）')
+  assert.equal(typeof input?.props?.onChange, 'function', 'The workbench offers a quick capture input')
+  input.props.onChange({ target: { value: '写一篇酶稳定性综述' } }); await e.flush()
+  const form = nodes(e.tree).find(node => node.type === 'form'
+    && node.children.some(child => child?.type === 'button' && child.children?.includes('记成待办')))
+  form.props.onSubmit({ preventDefault() {} }); await e.flush()
+
+  const action = e.requests.find(request => request.path === '/dsh-butler/api/capture')
+  assert.deepEqual(action.body, { title: '写一篇酶稳定性综述' })
+  e.reply(action, { ok: true, task: { id: 'task-captured', title: '写一篇酶稳定性综述', status: 'pending', createdAt: at, updatedAt: at } })
+  await e.flush()
+  const notices = nodes(e.tree).find(node => node.type?.name === 'NoticeRegion')?.props?.notices ?? []
+  assert.ok(notices.some(notice => String(notice.text).includes('已记为待办')), 'Capture is announced')
+  assert.ok(e.latest(/\/overview$/), 'Capture re-reads the dashboard')
+  const refreshed = e.latest(/\/overview$/)
+  e.reply(refreshed, overview(`${at}-capture`)); await e.flush()
 })
