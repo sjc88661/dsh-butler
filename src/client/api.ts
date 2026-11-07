@@ -194,6 +194,37 @@ async function getJson(path: string, signal?: AbortSignal): Promise<unknown> {
   return value
 }
 
+/** One global-search hit. */
+export interface SearchHit {
+  kind: 'note' | 'task' | 'memory'
+  id: string
+  title: string
+  snippet: string
+  path?: string
+  updatedAt?: string
+}
+
+/** Grouped global-search answer. */
+export interface SearchPayload {
+  ok: boolean
+  query: string
+  notes: SearchHit[]
+  tasks: SearchHit[]
+  memory: SearchHit[]
+  total: number
+  truncated: boolean
+}
+
+/**
+ * Search notes, tasks and memory.
+ * @param query - non-empty keywords.
+ * @param signal - abort signal for the caller's lifetime.
+ * @returns grouped hits.
+ */
+export async function searchButler(query: string, signal?: AbortSignal): Promise<SearchPayload> {
+  return await getJson(`${API_PREFIX}/search?q=${encodeURIComponent(query)}`, signal) as SearchPayload
+}
+
 /** One due reminder as the frame-wide overlay consumes it. */
 export interface DueReminder {
   id: string

@@ -484,3 +484,21 @@ test('a proposed memory can be confirmed from the workbench drawer and refreshes
   assert.ok(refreshed, 'A confirmed memory re-reads the dashboard')
   e.reply(refreshed, overview(`${at}-memo-refreshed`, { ledger: { open: tasks, interrupted: [], pending: [], recent: [], proposedMemos: [] } })); await e.flush()
 })
+
+test('global search asks the host and opens the selected note result', async () => {
+  const e = carrier(); await e.mount()
+  const input = nodes(e.tree).find(node => node.props?.['aria-label'] === '搜索管家资料')
+  assert.equal(typeof input?.props?.onChange, 'function', 'The workbench offers a global search input')
+  input.props.onChange({ target: { value: 'alpha' } }); await e.flush()
+  const form = nodes(e.tree).find(node => node.type === 'form')
+  form.props.onSubmit({ preventDefault() {} }); await e.flush()
+
+  const request = e.latest(/\/search\?q=/)
+  assert.equal(request.path, '/dsh-butler/api/search?q=alpha')
+  e.reply(request, { ok: true, query: 'alpha', notes: [{ kind: 'note', id: 'alpha', title: 'Alpha', snippet: '…alpha…', path: 'notes/alpha.md' }], tasks: [], memory: [], total: 1, truncated: false })
+  await e.flush()
+  const hit = nodes(e.tree).find(node => node.props?.['aria-label'] === '打开搜索结果：Alpha')
+  assert.equal(typeof hit?.props?.onClick, 'function', 'Search hits are clickable')
+  hit.props.onClick(); await e.flush()
+  assert.ok(e.latest(/\/note\?slug=alpha/), 'A note hit opens the note drawer')
+})

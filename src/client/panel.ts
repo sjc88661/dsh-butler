@@ -35,8 +35,8 @@
 import { createElement as h, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import {
-  fetchNote, fetchOverview, fetchTask, memoAction, reminderAction, taskAction,
-  type Memo, type NoteEntry, type NoteResult, type Overview, type PendingItem, type ReminderRecord, type TaskDetail,
+  fetchNote, fetchOverview, fetchTask, memoAction, reminderAction, searchButler, taskAction,
+  type Memo, type NoteEntry, type NoteResult, type Overview, type PendingItem, type ReminderRecord, type SearchPayload, type TaskDetail,
 } from './api.ts'
 import { PANEL_ID } from './ids.ts'
 import { shortTime } from './view.ts'
@@ -86,6 +86,10 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
   const [notices, setNotices] = useState<NoticeItem[]>([])
   /** Reminder ids the owner already acknowledged in this dashboard session. */
   const [dismissedDue, setDismissedDue] = useState<Record<string, true>>({})
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResult, setSearchResult] = useState<SearchPayload | null>(null)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [searching, setSearching] = useState(false)
   const loadVersion = useRef(0)
   const taskVisit = useRef(0)
   const fileAction = useSyncExternalStore(subscribeTaskFiles, taskFileSnapshot)
@@ -147,6 +151,21 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
         await load()
       } catch (cause) { notify('error', `记忆操作失败：${cause instanceof Error ? cause.message : String(cause)}`) }
     })()
+  }
+
+  /** One read-only search across notes, tasks and memory. */
+  const runSearch = (): void => {
+    const query = searchQuery.trim()
+    if (query === '') { setSearchResult(null); setSearchError(null); return }
+    setSearching(true)
+    setSearchError(null)
+    void searchButler(query).then(result => {
+      setSearchResult(result)
+      setSearching(false)
+    }, cause => {
+      setSearchError(cause instanceof Error ? cause.message : String(cause))
+      setSearching(false)
+    })
   }
 
   useEffect(() => {
@@ -332,6 +351,46 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
     'aria-label': `知道了：${record.title ?? record.id}`,
     onClick: () => setDismissedDue(previous => ({ ...previous, [String(record.id)]: true })) }, '知道了'))))
 
+  // Global search: one query across notes, tasks and memory. Results stay a
+  // small explicit list; clicking a hit opens the same detail surface as below.
+  const searchBar = h('form', {
+    onSubmit: (event: { preventDefault(): void }) => { event.preventDefault(); runSearch() },
+    style: { display: 'flex', gap: BUTLER_SPACE.xs, alignItems: 'center' },
+  },
+  h('input', {
+    type: 'search', value: searchQuery, 'aria-label': '搜索管家资料',
+    placeholder: '搜索笔记 / 任务 / 记忆…',
+    onChange: (event: { target: { value: string } }) => setSearchQuery(event.target.value),
+    style: { flex: '1 1 auto', minWidth: '0', padding: '6px 10px', borderRadius: '6px',
+      border: `1px solid ${BUTLER_COLORS.borderL1}`, background: BUTLER_COLORS.bgLayer1,
+      color: BUTLER_COLORS.labelPrimary, fontSize: '13px' },
+  }),
+  h('button', { type: 'submit', className: 'butler-btn butler-btn--secondary butler-btn--sm', disabled: searching },
+    searching ? '搜索中…' : '搜索'))
+  const searchKindLabel = { note: '笔记', task: '任务', memory: '记忆' } as const
+  const searchHits = searchResult === null ? [] : [...searchResult.notes, ...searchResult.tasks, ...searchResult.memory]
+  const searchPanel = searchResult === null && searchError === null ? null : h('div', {
+    'data-butler-search-results': '',
+    style: { display: 'flex', flexDirection: 'column', gap: BUTLER_SPACE.xs },
+  },
+  h('div', { style: { fontSize: '12px', lineHeight: '18px', color: BUTLER_COLORS.labelSecondary } },
+    searchError !== null ? `搜索失败：${searchError}`
+      : `搜索「${searchResult?.query ?? ''}」：${searchResult?.total ?? 0} 条${searchResult?.truncated === true ? '（已截断）' : ''}`),
+  searchHits.length === 0 ? null : h('div', { style: { display: 'flex', flexDirection: 'column', gap: BUTLER_SPACE.xs } },
+    ...searchHits.map(hit => h('button', {
+      key: `${hit.kind}:${hit.id}`, type: 'button', 'aria-label': `打开搜索结果：${hit.title}`,
+      onClick: () => {
+        if (hit.kind === 'note') openNoteDetail(hit.id)
+        else if (hit.kind === 'task') openTaskDetail(hit.id)
+        else openNoticeDetail(hit.title, hit.snippet)
+      },
+      style: { display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left', width: '100%',
+        padding: '6px 10px', borderRadius: '6px', border: `1px solid ${BUTLER_COLORS.borderL1}`,
+        background: BUTLER_COLORS.bgLayer1, color: BUTLER_COLORS.labelPrimary, cursor: 'pointer' },
+    },
+    h('span', { style: { fontSize: '13px', lineHeight: '20px' } }, `${searchKindLabel[hit.kind]} · ${hit.title}`),
+    h('span', { style: { fontSize: '12px', lineHeight: '18px', color: BUTLER_COLORS.labelSecondary } }, hit.snippet)))))
+
   const body = overview === null
     ? error === null
       ? h('div', { style: { flex: '1 1 auto', minHeight: '0', padding: '16px' } },
@@ -348,6 +407,8 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
       h('div', { className: 'butler-stack' },
         h(NoticeRegion, { notices }),
         reminderBanner,
+        searchBar,
+        searchPanel,
         todayZone({ overview, openTask: openTaskDetail, selectedTaskId: openTaskId, taskActions: applyTaskAction }),
         decisionsZone({ overview, openTask: openTaskDetail, openMemo: openMemoDetail, openApproval: openApprovalDetail, openNotice: openNoticeDetail, selectedTaskId: openTaskId, taskActions: applyTaskAction }),
         resourcesZone({

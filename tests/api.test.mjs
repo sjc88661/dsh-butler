@@ -9,7 +9,7 @@ const base = resolve('tests/.tmp'); mkdirSync(base, { recursive: true })
 const home = mkdtempSync(join(base, 'api-'))
 process.env.DSH_BUTLER_VAULT = join(home, 'vault')
 process.env.DSH_BUTLER_HOME = join(home, 'state')
-const { ensureVault, vaultPath, statePath, sha256 } = await import('../src/host/vault.ts')
+const { ensureVault, vaultPath, statePath, sha256, writeText } = await import('../src/host/vault.ts')
 const { registerButlerApi } = await import('../src/host/api.ts')
 const { upsertTask, addReceipt, addUsage, addUsageBatch, listTasks, addMemo, listMemos } = await import('../src/host/ledger.ts')
 const { EvidenceStore } = await import('../src/host/evidence-store.ts')
@@ -713,5 +713,24 @@ test('memo action route confirms/rejects proposed memories once with audit and c
     assert.equal((await e.request('/dsh-butler/api/memo-action', 'POST', { action: 'confirm', id: 'missing-memo' })).status, 404)
     assert.equal((await e.request('/dsh-butler/api/memo-action', 'POST', { action: 'explode', id: confirmId })).status, 400)
     assert.equal((await e.request('/dsh-butler/api/memo-action', 'GET')).status, 405)
+  } finally { e.dispose() }
+})
+
+test('search route returns grouped read-only hits and validates the query', async () => {
+  writeText(vaultPath('notes', 'api-search.md'), '# API Search\n\nenzyme stability text')
+  upsertTask('api-search-task', { title: 'API enzyme task', status: 'pending' })
+  addMemo({ id: 'api-search-memo', text: 'enzyme preference', source: 'butler' })
+  const e = api()
+  try {
+    const response = await e.request('/dsh-butler/api/search?q=enzyme')
+    assert.equal(response.status, 200)
+    assert.equal(response.body.ok, true)
+    assert.equal(response.body.query, 'enzyme')
+    assert.ok(response.body.notes.some(hit => hit.id === 'api-search'))
+    assert.ok(response.body.tasks.some(hit => hit.id === 'api-search-task'))
+    assert.ok(response.body.memory.some(hit => hit.id === 'api-search-memo'))
+    assert.equal((await e.request('/dsh-butler/api/search')).status, 400)
+    assert.equal((await e.request(`/dsh-butler/api/search?q=${'a'.repeat(201)}`)).status, 400)
+    assert.equal((await e.request('/dsh-butler/api/search?q=enzyme', 'POST')).status, 405)
   } finally { e.dispose() }
 })

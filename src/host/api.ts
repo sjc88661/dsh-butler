@@ -27,6 +27,7 @@ import type { UsageBackfillState } from './backfill.ts'
 import { decideMemo, getTask, listMemos, listTasks, receipts, setButlerSessionId, setTaskStatus, snapshot, upsertTask, usageRecords, usageTotals } from './ledger.ts'
 import { EvidenceStore } from './evidence-store.ts'
 import { storageStatus } from './store.ts'
+import { searchAll } from './search.ts'
 import { archivedReminderKeys, archivedTaskIds } from './archive.ts'
 import type { ArtifactSnapshot, HistoryBudget, HistoryItems, HistoryKind, HistoryPage, RuntimeControlsSnapshot, TaskDetail, TaskReadSnapshot, TaskReminderSnapshot, ReminderOperationSnapshot } from '../shared/workbench.ts'
 import type { Task } from './ledger.ts'
@@ -746,6 +747,23 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
           if (decided === undefined) { sendJson(res, 404, { ok: false, error: '没有这条记忆提案' }); return }
           sendJson(res, 200, { ok: true, action, memo: { id: decided.id, status: decided.status, text: decided.text } })
         } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
+      },
+    }),
+    server.register({
+      // One read-only entry point across notes, tasks and memory. Small caps and
+      // explicit truncation: this feeds a small result list, not an export.
+      kind: 'exact',
+      path: `${API_PREFIX}/search`,
+      handler: (req, res) => {
+        if ((req.method ?? 'GET').toUpperCase() !== 'GET') { sendJson(res, 405, { ok: false, error: '搜索只支持 GET' }); return }
+        const params = new URL(req.url ?? '/', 'http://localhost').searchParams
+        const query = (params.get('q') ?? '').trim()
+        if (query === '') { sendJson(res, 400, { ok: false, error: '需要 q 参数（搜索关键词）' }); return }
+        if (query.length > 200) { sendJson(res, 400, { ok: false, error: '关键词过长（上限 200 字符）' }); return }
+        const requested = Number(params.get('limit'))
+        const limit = Number.isSafeInteger(requested) ? Math.min(20, Math.max(1, requested)) : 8
+        try { sendJson(res, 200, { ok: true, ...searchAll(query, { limit }) }) }
+        catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
       },
     }),
     server.register({
