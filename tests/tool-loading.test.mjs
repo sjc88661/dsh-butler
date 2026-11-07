@@ -11,6 +11,17 @@ const recorded = JSON.parse(readFileSync(new URL('./fixtures/tools-251.json', im
 const target = recorded.find(tool => tool.name.startsWith('mcp__') && /decompil/i.test(tool.name))
 assert.ok(target, 'recorded tool fixture must contain a real deferred capability')
 
+test('hosts whose assemble waterfall omits tool declarations degrade instead of failing', async () => {
+  const e = environment(), a = e.agent('no-tools-waterfall')
+  const assembly = { sections: [], contexts: [{ name: 'permission', text: 'original policy' }], variables: {} }
+  const result = await e.dispatch('system-prompt/assemble', [assembly, { agent: a }], () => assembly)
+  assert.equal(result.tools, undefined, 'the waterfall leaves tool declarations to the host')
+  assert.ok(result.contexts.some(row => row.name === 'butler:tool-loading'))
+  assert.equal(e.loading.status().scopes.find(row => row.sessionId === 'no-tools-waterfall').mode, 'native-unfiltered')
+  const decision = await e.dispatch('tools/pre-execute', [{ agent: a, name: 'butler_task' }], () => ({ kind: 'allow' }))
+  assert.deepEqual(decision, { kind: 'allow' })
+  e.loading.stop()
+})
 test('native final-answer planning cannot be undone by discovery fallback or PTC mode', async () => {
   for (const mode of ['native', 'ptc']) {
     const e = environment(), a = e.agent(`final-${mode}`); a.mode = mode

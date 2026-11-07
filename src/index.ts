@@ -51,6 +51,7 @@ import { installTrial, type TrialConfigInput, type TrialContext } from './host/t
 import { installToolLoading } from './host/tool-loading.ts'
 import { installSkillLoading } from './host/skill-loading.ts'
 import { installExecutionContext, type ExecutionContexts } from './host/execution-context.ts'
+import { isChannelSession } from './host/channel-sessions.ts'
 import { retainCompactionBackups, storageStatus } from './host/store.ts'
 import { installBusinessWorkflows, type BusinessWorkflows } from './host/workflow-runtime.ts'
 import { installButlerExtensions, type ButlerExtensionsHostContext } from './host/extensions.ts'
@@ -265,7 +266,8 @@ export function apply(ctx: AppContext, config: Config): void {
     })
   } catch (error) { reminderFailure = error; ctx.logger?.error?.('[dsh-butler] 提醒绑定不可读，提醒执行已阻止：%s', String(error)) }
   const layer = createButlerLayer(ctx, {
-    ownsSession: id => workspace?.owns(id) ?? false,
+    // Channel sessions (e.g. lark-) get butler capabilities while keeping their own conversation.
+    ownsSession: id => (workspace?.owns(id) ?? false) || isChannelSession(id),
     reminderSession: id => reminders?.status().some(binding => binding.id === id) ?? false,
   })
   ctx.effect(() => layer.stop, 'butler: dedicated agent layer')
@@ -647,6 +649,7 @@ export function apply(ctx: AppContext, config: Config): void {
     VAULT_HOME,
     config.timeZone,
   )
+
 }
 
 /**

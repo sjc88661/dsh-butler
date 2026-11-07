@@ -1,8 +1,8 @@
 {
   "name": "@dsh-external/dsh-butler",
   "version": "0.1.0",
-  "description": "管家：个人助理内核（长期记忆 + 任务账本 + 证据守卫 + 资料版本 + 可加装能力包）",
-  "private": true,
+  "description": "管家：DSH 个人助理插件（长期记忆 · 任务账本 · 提醒闭环 · 每日简报 · 飞书双向 · 工作台）",
+  "private": false,
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
@@ -24,7 +24,8 @@
     "typecheck": "node scripts/build.mjs --typecheck",
     "build:client": "node scripts/build.mjs --no-pack",
     "test": "node --test tests/*.test.mjs",
-    "cost-probe": "node scripts/cost-probe.mjs"
+    "cost-probe": "node scripts/cost-probe.mjs",
+    "build:all": "node scripts/build.mjs"
   },
   "exports": {
     "./extension": {
@@ -63,5 +64,27 @@
         "@deepseek-ai/dsh-client-ui-layout"
       ]
     }
+  },
+  "author": {
+    "name": "申俊超"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sjc88661/dsh-butler.git"
+  },
+  "homepage": "https://github.com/sjc88661/dsh-butler#readme",
+  "bugs": {
+    "url": "https://github.com/sjc88661/dsh-butler/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "butler",
+    "personal-assistant",
+    "plugin",
+    "feishu"
+  ],
+  "engines": {
+    "node": ">=22"
   }
 }

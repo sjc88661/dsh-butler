@@ -1,11 +1,11 @@
 # 验收记录：完整管家 0.1.1（2026-11-07）
 
 目标：把 `@dsh-external/dsh-butler` 从"技术可用"升级为"完整、每天真的会用"的个人助理。
-基线：DSH `0.2.2-rc.1`，插件 0.1.0，仓库 HEAD `b3ae6db`；测试基线 1026 → 现在 **1118**。
+基线：DSH `0.2.2-rc.1`，插件 0.1.0；测试基线 1026 → 现在 **1121**（补充双向飞书回归后）。
 
 ## 总结论
 
-P0–P3 计划内功能全部落地，真实宿主自检通过，测试全绿（1118/1118），typecheck 通过。
+P0–P3 计划内功能全部落地，真实宿主自检通过，测试全绿（1121/1121），typecheck 通过。
 发现的唯一"外部依赖阻塞"（`dsh-lark-channel 0.0.7` 不实现管家提醒投递接口）已用宿主自带
 飞书发送器绕开，并把 appSecret 迁入 DSH `credentials`。
 
@@ -50,7 +50,7 @@ cd E:\opendots\dsh-butler
 $env:DSH_CHECKOUT='C:\Users\申俊超\dsh-harness'
 $env:DSH_PROFILE_DIR='C:\Users\申俊超\.dsh\profiles\desktop'
 node scripts/build.mjs --typecheck          # 通过
-node --test tests/*.test.mjs                # 1118/1118
+node --test tests/*.test.mjs                # 1121/1121
 node scripts/build.mjs                      # lib/index.js + lib/client.js
 ```
 
@@ -69,10 +69,20 @@ node scripts/build.mjs                      # lib/index.js + lib/client.js
 3. 数据恢复：`POST /api/restore {"id":"butler-backup-…","confirm":"RESTORE"}`（自动先做 pre-restore 快照）。
 4. 完全移除：删除 profile patch 中 `butler-feishu-push` 段与 bundle 安装，删除 `link:` 依赖。
 
+## 双向飞书（2026-11-07 晚补验）✅
+
+- 手机私聊走 **lark 通道自己的持久会话**（`lark-<chat_id>` 前缀），不再指向管家桌面会话；管家层把工具、提示、账本钩子挂到该会话，两侧共享任务/提醒/账本，但不共享同一个 live session。
+- 关键实现：`src/host/channel-sessions.ts`（`lark-` 前缀识别）；`src/index.ts` 的 `ownsSession` 同时覆盖管家工作区与通道会话。
+- 早期尝试把飞书私聊固定到管家桌面会话（`chatSessions`）失败并已回退：两个 agent 工厂争用一个 live session，先触发提示组装错误，后触发 `cannot append outside a SessionStore`；该映射已从 profile patch 移除。
+- 端到端实测：飞书私聊「管家，在吗」→ `lark-oc_55aa…--e1` 会话 `user/message` → `turn/start` → `assistant/message` → `turn/end(completed)`（2026-11-07 18:07:40），手机收到管家回复。
+- 期间发现并修复 DSH `0.2.2` 契约变更：`system-prompt/assemble` 不再向插件暴露 `tools`（宿主要在瀑布流之后才追加并会覆盖返回值）。管家原「按需工具过滤」读 `assembly.tools.some(...)` 会使**所有管家会话回合**在提示组装阶段崩溃；现改为检测到无 `tools` 时降级为原生工具层决定目录（全部管家工具可见，功能正常、提示 token 略增），旧宿主仍走原按需过滤。
+
 ## 已知边界（未做/需你决定）
 
 - 助手消息上的"随手捕获"入口（`conversation.chat.assistant-actions` 席位）未做：当前捕获在工作台输入框；如需要"任何回复一键记待办"，下一轮可加（需要读消息内容的能力）。
 - 离线补发：宿主不在线时无法主动投递；当前兜底为下次打开（浮层/横幅立即显示到期项）+ 飞书看门狗（宿主在线时）。若要求"重启后把错过的提醒补投到提醒会话"，需再设计。
-- 飞书目前用测试应用（`cli_aa52b8e22cb8dbfe`）；换正式应用只需改 appId/owner open_id 并重新 `POST /api/feishu-credential`。
+- 飞书目前用测试应用（`cli_<测试应用>`）；换正式应用只需改 appId/owner open_id 并重新 `POST /api/feishu-credential`。
 - Zotero 只读来源未接（原为可选加分项）。
 - 设置页为只读（配置仍在 profile Cordis patch），改配置后需重载 bundle。
+- DSH 0.2.2 上管家工具全部原生可见（按需 load 仅提示性）；如需恢复精简目录，需改用原生工具 provider 实现。
+- 手机与桌面是两个会话：共享任务/提醒/账本，但对话历史不互通；用飞书 `/sessions` 可接续其它会话。

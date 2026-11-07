@@ -278,6 +278,26 @@ export function installToolLoading(ctx: Context, options: { file?: string; maxEx
   dispose.push(ctx.on('system-prompt/assemble', async (_assembly: unknown, context: { agent?: Agent }, next: () => any) => {
     const assembly = await next(), agent = context.agent
     if (!agent || !appliesTo(agent)) return assembly
+    // DSH 0.2.2 stopped handing tool declarations to this waterfall: the
+    // assembly it passes carries sections/contexts/variables only, and the host
+    // adds the final `tools` AFTER the waterfall (it also overrides a `tools`
+    // returned here). Filtering the request's tool list is therefore impossible
+    // in this host version — degrade to the host's own immediate set and keep
+    // the runtime guard permissive, instead of failing every turn with
+    // "reading 'some'". Older hosts still take the filtering path below.
+    if (!Array.isArray((assembly as { tools?: Schema[] }).tools)) {
+      const immediate = available(agent)
+      if (assembly.contexts?.some((item: { name: string }) => item.name === 'butler:budget-final')) {
+        exposed.set(agent.id, { origin: originFor(agent), names: new Set() })
+        observed.set(agent.id, { mode: 'final-answer', hostToolsInWaterfall: false, availableTools: immediate.length, visibleTools: 0 })
+        try { rebaseHeader(agent, [], false) } catch (caught) { failure(caught) }
+        return { ...assembly, sections: demandPromptSections(assembly.sections ?? [], [], agent, new Set(), { finalAnswer: true }).sections }
+      }
+      exposed.set(agent.id, { origin: originFor(agent), names: new Set(immediate.map(tool => tool.name)) })
+      observed.set(agent.id, { mode: 'native-unfiltered', hostToolsInWaterfall: false, availableTools: immediate.length, visibleTools: immediate.length })
+      return { ...assembly, contexts: [...(assembly.contexts ?? []),
+        { name: 'butler:tool-loading', text: '当前宿主版本由原生工具层决定本次请求的工具目录；已注册的管家工具可直接调用，无需先 load。工具发现与加载只影响旧版宿主的按需目录，不阻止本请求的执行。' }] }
+    }
     if (assembly.contexts?.some((item: { name: string }) => item.name === 'butler:budget-final')) {
       rebaseHeader(agent, [], false)
       exposed.set(agent.id, { origin: originFor(agent), names: new Set() })
