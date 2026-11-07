@@ -49,8 +49,9 @@
 - [x] 到期提醒可见：工作台顶部「到期提醒 N 条」条（标题/计划时间/知道了/打开管家会话处理），重新加载仍可见（未处理），已确认的本会话隐藏
 - [x] **框级提醒浮层**（`shell.overlay` 席位）：任意页面右下角显示到期提醒；独立小接口 `GET /api/due`（只返回 active 且已到期的规则）；「知道了」按 occurrence（`id@scheduledAt`）写入 localStorage，重复提醒的下一次仍会出现；60s 轮询 + 不可见不发
 - [x] **提醒规则操作**：`POST /api/reminder-action`（snooze 10 分钟 / reschedule / complete / cancel / pause / resume）走 DSH `schedule.edit`；一次性规则可推迟/改期，重复规则拒绝单次推迟（提示改期或完成）；同步关联账本任务（完成→done、取消→cancelled、停用→waiting_review、推迟→dueAt）；归档 fixture 409；浮层与工作台横幅都可「稍后10分 / 完成」
-- [ ] 提醒闭环剩余：离线补发投递到专属会话、飞书送达
-- [ ] 飞书通道接线（测试应用先验证：channelOwnerId/bindings；提醒送达；手机问话）
+- [x] **飞书提醒推送**（宿主自带发送器，不依赖 lark 插件）：`src/host/feishu.ts` 用应用凭据换 tenant token（缓存）→ 只给配置的本人 `open_id` 发文本；`src/host/feishu-reminders.ts` 看门狗只推管家提醒会话（`session-butler-reminder-*`），同一 occurrence 只发一次，失败最多重试 3 次后 gave-up，落盘 `state/feishu-reminders.json`；overview 暴露 `feishu{enabled,configured,sent,failed,gaveUp,lastError}`；配置在 profile 层 `dsh-butler` 覆写（已启用，未发送任何测试消息）
+- [ ] 提醒闭环剩余：离线补发投递到专属会话（当前用浮层/横幅"下次打开即见"兜底）
+- [ ] 飞书正式账户/凭据迁 credentials（P3）
 
 ### P2 知识闭环
 

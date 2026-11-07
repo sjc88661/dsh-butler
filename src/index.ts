@@ -40,6 +40,8 @@ import type { ToolDeps } from './host/tools.ts'
 import { registerButlerTools } from './host/tools.ts'
 import { installUsageBackfill } from './host/backfill.ts'
 import { collectBriefSource, installDailyBrief } from './host/brief.ts'
+import { createFeishuSender } from './host/feishu.ts'
+import { createFeishuReminderWatcher, type FeishuReminderRow, type FeishuReminderWatcher } from './host/feishu-reminders.ts'
 import { installUsageRecorder } from './host/usage.ts'
 import { TaskBudgets } from './host/budget.ts'
 import { ReminderSessions, type ReminderFactory } from './host/reminder-session.ts'
@@ -93,6 +95,20 @@ export interface Config {
   taskMaxMinutes: number
   contextTokens: number
   /**
+   * Optional Feishu (Lark) self-reminder push. Off by default.
+   *
+   * When enabled, due butler reminders are pushed to the configured owner
+   * open_id through the app credentials; nothing else is sent and no contact
+   * list is read. Credentials live only in the local profile config.
+   */
+  feishuEnabled?: boolean
+  feishuAppId?: string
+  feishuAppSecret?: string
+  /** The owner's own open_id (self-notification only). */
+  feishuOwnerOpenId?: string
+  /** API origin override, e.g. for tests; empty means the public Feishu API. */
+  feishuBaseUrl?: string
+  /**
    * Optional isolated daily trial (请求/ token / 时长 + 北京时间每日预算).
    *
    * Omitted or `enabled:false` publishes nothing and installs no hook; the
@@ -111,6 +127,11 @@ export const Config = z.object({
   taskMaxTokens: z.number().min(10000).max(20000000).default(2000000),
   taskMaxMinutes: z.number().min(1).max(120).default(15),
   contextTokens: z.number().min(16000).max(128000).default(64000),
+  feishuEnabled: z.boolean().default(false),
+  feishuAppId: z.string().default(''),
+  feishuAppSecret: z.string().default(''),
+  feishuOwnerOpenId: z.string().default(''),
+  feishuBaseUrl: z.string().default(''),
   // 可选隔离试用：默认关闭；限额默认值沿用 diagnostics 里已验证的 6 次 / 160k / 3 分钟 / 每日 20 次 / 480k。
   // provider、model 与 allowedSessionIds 没有默认值：启用但没给全时由 host/trial.ts 显式降级，而不是放宽。
   trial: z.object({
@@ -493,6 +514,43 @@ export function apply(ctx: AppContext, config: Config): void {
     })()),
   }), 'butler: daily briefs')
 
+  // Feishu self-reminder push (optional). The sender only talks to the public
+  // Feishu API with the configured app, and only the owner's own open_id is a
+  // recipient. The watcher pushes butler reminder sessions only, once per
+  // occurrence, and never retries a gave-up occurrence forever.
+  const feishuSender = config.feishuEnabled === true && config.feishuAppId !== '' && config.feishuAppSecret !== ''
+    && config.feishuOwnerOpenId !== ''
+    ? createFeishuSender({ appId: config.feishuAppId ?? '', appSecret: config.feishuAppSecret ?? '', ownerOpenId: config.feishuOwnerOpenId ?? '',
+      ...(config.feishuBaseUrl === '' ? {} : { baseUrl: config.feishuBaseUrl }) })
+    : undefined
+  let feishuWatcher: FeishuReminderWatcher | undefined
+  if (feishuSender !== undefined) {
+    try {
+      feishuWatcher = createFeishuReminderWatcher({
+        sender: feishuSender,
+        catalog: async (): Promise<FeishuReminderRow[]> => {
+          const live = services.schedule.get()
+          if (live === undefined) throw new Error(services.schedule.why() || '调度服务不可用')
+          return (await live.catalog()).map(row => ({
+            id: row.id,
+            ...(row.title === undefined ? {} : { title: row.title }),
+            ...(row.scheduledAt === undefined ? {} : { scheduledAt: row.scheduledAt }),
+            ...(row.status === undefined ? {} : { status: row.status }),
+            ...(row.target === undefined ? {} : { target: {
+              ...(row.target.kind === undefined ? {} : { kind: row.target.kind }),
+              ...('sessionId' in row.target && typeof row.target.sessionId === 'string' ? { sessionId: row.target.sessionId } : {}),
+            } }),
+          }))
+        },
+        logger: ctx.logger,
+      })
+      ctx.effect(() => feishuWatcher!.install(), 'butler: feishu reminder push')
+      ctx.logger?.info?.('[dsh-butler] 飞书提醒推送已启用（只发送到配置的本人 open_id）')
+    } catch (error) {
+      ctx.logger?.warn?.('[dsh-butler] 飞书提醒推送初始化失败（其余功能不受影响）：%s', String(error))
+    }
+  }
+
   const disposeApi = registerButlerApi(ctx as unknown as ButlerApiContext, {
     timeZone: config.timeZone,
     schedule: {
@@ -517,6 +575,12 @@ export function apply(ctx: AppContext, config: Config): void {
     session: (): Promise<ButlerSessionInfo> => session.ensureReady(),
     usage: () => usage.status(),
     usageBackfill: () => ({ ...usageBackfill, running: usageBackfill.running }),
+    feishu: () => ({
+      enabled: config.feishuEnabled === true,
+      configured: feishuSender !== undefined,
+      ...(feishuWatcher?.status() ?? {}),
+      ...(feishuSender?.status().lastError === undefined ? {} : { lastError: feishuSender.status().lastError }),
+    }),
     budgetHistory: () => {
       if (!budgets) throw new Error(`预算历史不可用：${String(budgetFailure ?? '预算服务未提供')}`)
       return budgets.history()

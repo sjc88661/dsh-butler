@@ -680,3 +680,15 @@ test('reminder action route snoozes one-shot rules, refuses recurring edits and 
     assert.equal((await noEdit.request('/dsh-butler/api/reminder-action', 'POST', { action: 'complete', id: 'rem-one-shot' })).status, 503)
   } finally { noEdit.dispose() }
 })
+
+test('overview exposes feishu reminder status only when the host provides it', async () => {
+  const e = api({ feishu: () => ({ enabled: true, configured: true, sent: 2, failed: 0, gaveUp: 0 }) })
+  try {
+    const response = await e.request('/dsh-butler/api/overview')
+    assert.deepEqual(response.body.feishu, { enabled: true, configured: true, sent: 2, failed: 0, gaveUp: 0 })
+  } finally { e.dispose() }
+  const absent = api()
+  try {
+    assert.equal((await absent.request('/dsh-butler/api/overview')).body.feishu, undefined)
+  } finally { absent.dispose() }
+})

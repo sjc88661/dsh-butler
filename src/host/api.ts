@@ -112,6 +112,16 @@ export interface ButlerApiDeps {
    * many rather than presenting them as if the feed had caught them.
    */
   usageBackfill?: () => UsageBackfillState
+  /** Optional Feishu self-reminder push status; absent means not configured. */
+  feishu?: () => {
+    enabled: boolean
+    configured: boolean
+    sent?: number
+    failed?: number
+    gaveUp?: number
+    lastError?: string
+    lastTickAt?: string
+  }
   runtimeControls?: () => RuntimeControlsSnapshot
   reminderOperations?: () => ReminderOperation[]
   /** Every saved run, including superseded runs; no current-policy reconstruction. */
@@ -159,6 +169,8 @@ interface OverviewPayload {
   usageRecorder?: UsageRecorderStatus
   /** What the startup backfill found, so log-recovered rows are not passed off as live ones. */
   usageBackfill?: UsageBackfillState
+  /** Feishu self-reminder status, when the host exposes it. */
+  feishu?: ReturnType<NonNullable<ButlerApiDeps['feishu']>>
   runtimeControls?: RuntimeControlsSnapshot
   taskHistory?: { tasks: TaskReadSnapshot[]; total: number; limit: number }
   memory?: ReturnType<typeof readMemoryStatus>
@@ -541,6 +553,7 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
           ...(sessionError === undefined ? {} : { sessionError }),
           ...(deps.usage === undefined ? {} : { usageRecorder: deps.usage() }),
           ...(deps.usageBackfill === undefined ? {} : { usageBackfill: deps.usageBackfill() }),
+          ...(deps.feishu === undefined ? {} : { feishu: deps.feishu() }),
           ...(deps.runtimeControls === undefined ? {} : { runtimeControls: controls }),
         }
         // Conditional GET: the payload is big, and the panel polls it. The ETag
