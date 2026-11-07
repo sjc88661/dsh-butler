@@ -39,6 +39,7 @@ import { registerWorkspaceApi } from './host/workspace-api.ts'
 import type { ToolDeps } from './host/tools.ts'
 import { registerButlerTools } from './host/tools.ts'
 import { installUsageBackfill } from './host/backfill.ts'
+import { collectBriefSource, installDailyBrief } from './host/brief.ts'
 import { installUsageRecorder } from './host/usage.ts'
 import { TaskBudgets } from './host/budget.ts'
 import { ReminderSessions, type ReminderFactory } from './host/reminder-session.ts'
@@ -478,6 +479,19 @@ export function apply(ctx: AppContext, config: Config): void {
     butlerSession: butlerSessionId,
   })
   ctx.effect(() => usageBackfill.stop, 'butler: background usage backfill')
+
+  // Owner-approved daily rhythm: a short morning brief at 08:30 and an evening
+  // review at 21:30, written into the daily page. Host-side and model-free: the
+  // brief is a projection of the ledger/scheduler, so it stays cheap and works
+  // while no chat is open. Late starts catch up inside a bounded window.
+  ctx.effect(() => installDailyBrief({
+    timeZone: config.timeZone,
+    logger: ctx.logger,
+    collect: () => collectBriefSource((() => {
+      const live = services.schedule.get()
+      return live === undefined ? undefined : { catalog: () => live.catalog() }
+    })()),
+  }), 'butler: daily briefs')
 
   const disposeApi = registerButlerApi(ctx as unknown as ButlerApiContext, {
     timeZone: config.timeZone,

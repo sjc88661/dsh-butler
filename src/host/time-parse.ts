@@ -362,15 +362,16 @@ function toAtTiming(target: OneShotTarget, now: Date, timeZone: string): { timin
 
 /** Parse the relative-duration forms: 20分钟后 / 2小时之后 / 3天后. */
 function parseAfter(text: string): AfterTiming | undefined {
-  const match = /(半|[一二两三四五六七八九十]+|\d+(?:\.\d+)?)\s*(分钟|分|个小时|小时|钟头|天|周|星期)\s*(?:之后|以后|后)/.exec(text)
+  const match = /(半|[一二两三四五六七八九十]+|\d+(?:\.\d+)?)\s*(秒钟?|分钟|分|个小时|小时|钟头|天|周|星期)\s*(?:之后|以后|后)/.exec(text)
   if (match === null) return undefined
   const amount = parseNumberToken(match[1]!)
   if (amount === undefined) return undefined
   const unit = match[2]!
-  const seconds = unit === '分钟' || unit === '分' ? amount * 60
-    : unit === '个小时' || unit === '小时' || unit === '钟头' ? amount * 3600
-      : unit === '天' ? amount * 86400
-        : amount * 7 * 86400
+  const seconds = unit === '秒' || unit === '秒钟' ? amount
+    : unit === '分钟' || unit === '分' ? amount * 60
+      : unit === '个小时' || unit === '小时' || unit === '钟头' ? amount * 3600
+        : unit === '天' ? amount * 86400
+          : amount * 7 * 86400
   if (!Number.isFinite(seconds) || seconds <= 0) return undefined
   return { kind: 'after', afterSeconds: Math.round(seconds) }
 }

@@ -41,11 +41,11 @@
 ### P1 日常可用（进行中）
 
 - [x] **提醒子系统迁移到 0.2.2 schedule 契约**（产品代码完成、typecheck 通过；`projectReminder` 归一化、`edit delete` 取消、新 history 形状）
-- [ ] 迁移后测试适配（18 条提醒用例的 0.2.2 fake；subagent 进行中）
+- [x] 迁移后测试适配（18 条提醒用例的 0.2.2 fake；全量 1066/1066）
 - [x] 自然语言时间解析模块 `src/host/time-parse.ts`（10 测试）
-- [ ] 把 `time-parse` 接进 `butler_remind`（at / after / daily / weekly；模糊时 `needsClarification` 返回缺什么）
-- [ ] 提醒闭环：到期 toast（`shell.overlay`）+ 专属会话消息 + 飞书；完成/稍后/改期/取消；DSH 未运行则下次启动补发 overdue；重复提醒（daily/weekly）
-- [ ] 每日简报 08:30 / 21:30（今天/逾期/等你决定/提醒；完成/未完成/建议），自动写 daily
+- [x] 把 `time-parse` 接进 `butler_remind`：`when` 支持今晚8点/明天上午9点半/周五晚上7点/11月8日/20分钟后/每天20:00/每周一三五；缺信息返回 `needsClarification` + `missing`，不再只认数字相对时间；相对秒/分/小时保留
+- [x] **每日简报** `src/host/brief.ts`：08:30 早报 + 21:30 晚报自动写 daily（今日到期/逾期/等你决定/提醒/建议；晚报完成/未完成/明日到期）；窗口外不写、重启幂等、归档 fixture 不进简报；插件激活时补写；已实测写入 `vault/daily/2026-11-07.md`
+- [ ] 提醒闭环：到期 toast（`shell.overlay`）+ 专属会话 + 通知；完成/稍后/改期/取消；DSH 未运行则下次启动补发 overdue
 - [ ] 工作台可操作：任务完成/改期/取消/继续；逾期进"等你决定"；提醒独立区 + 角标
 - [ ] 飞书通道接线（测试应用先验证：channelOwnerId/bindings；提醒送达；手机问话）
 

@@ -109,22 +109,46 @@ test('the real reminder tool replays one creation and exposes genuine history an
   assert.equal(getTask(first.task.id).status, 'cancelled')
 })
 
-test('the reminder tool parses only explicit numeric relative seconds, minutes and hours into a frozen native at', async () => {
-  for (const [when, expected] of [['从现在起60秒后', '2026-10-21T03:01:00.000Z'], ['2分钟后', '2026-10-21T03:02:00.000Z'], ['1小时后', '2026-10-21T04:00:00.000Z']]) {
+test('the reminder tool resolves relative durations and natural-language phrases into concrete native timing', async () => {
+  // Explicit relative durations still schedule off the host clock; the planner
+  // receives the service's tagged timing instead of a frozen legacy instant.
+  for (const [when, seconds] of [['从现在起60秒后', 60], ['2分钟后', 120], ['1小时后', 3600]]) {
     let clock = '2026-10-21T03:00:00.000Z'
     const e = environment({ reminderOptions: { now: () => clock } })
     const args = { action: 'create', title: 'Relative reminder', when }
     const first = await e.call('butler_remind', args, 'relative-call')
     assert.equal(first.ok, true, JSON.stringify(first))
-    assert.equal(e.scheduleRequests[0].timing.at, expected)
+    assert.deepEqual(e.scheduleRequests[0].timing, { kind: 'after', after_seconds: seconds })
     clock = '2026-10-21T05:00:00.000Z'
     const replay = await e.call('butler_remind', args, 'relative-call')
     assert.equal(replay.reminder.id, first.reminder.id)
     assert.equal(e.creates, 1)
   }
+
+  // Natural language resolves to tagged timing; the date depends on "now", so
+  // assert the shape/zone rather than one calendar day.
+  const daily = environment()
+  const dailyReminder = await daily.call('butler_remind', { action: 'create', title: 'Daily', when: '每天20:00' })
+  assert.equal(dailyReminder.ok, true, JSON.stringify(dailyReminder))
+  assert.deepEqual(daily.scheduleRequests[0].timing, { kind: 'daily', daily: { time: '20:00', time_zone: dailyReminder.tz } })
+
+  const weekly = environment()
+  const weeklyReminder = await weekly.call('butler_remind', { action: 'create', title: 'Weekly', when: '每周一三五 20:00' })
+  assert.equal(weeklyReminder.ok, true, JSON.stringify(weeklyReminder))
+  assert.deepEqual(weekly.scheduleRequests[0].timing, { kind: 'weekly', weekly: { time: '20:00', time_zone: weeklyReminder.tz, weekdays: [1, 3, 5] } })
+
+  const oneShot = environment()
+  const tonight = await oneShot.call('butler_remind', { action: 'create', title: 'Tonight', when: '今晚8点' })
+  assert.equal(tonight.ok, true, JSON.stringify(tonight))
+  assert.equal(oneShot.scheduleRequests[0].timing.kind, 'at')
+  assert.equal(oneShot.scheduleRequests[0].timing.at.time_zone, tonight.tz)
+  assert.equal(oneShot.scheduleRequests[0].timing.at.time, '20:00')
+
+  // A missing clock is asked for, never invented.
   const unresolved = environment()
-  const clarification = await unresolved.call('butler_remind', { action: 'create', title: 'Unresolved reminder', when: '找个时间' })
+  const clarification = await unresolved.call('butler_remind', { action: 'create', title: 'Unresolved reminder', when: '明天' })
   assert.equal(clarification.needsClarification, true)
+  assert.ok(clarification.missing.includes('钟点'), JSON.stringify(clarification))
   assert.equal(unresolved.creates, 0)
   assert.deepEqual(unresolved.reminderOperations.status(), [])
 })

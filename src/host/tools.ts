@@ -56,6 +56,7 @@ import { getPack, listPacks, matchPacks, packsSummary, scaffoldPack, setPackEnab
 import { PACK_BOUNDARY_DESCRIPTION } from '../shared/packs.ts'
 import type { ScheduleService, ScheduleTiming, WebService } from './ctx.ts'
 import { projectReminderCatalog } from './remind.ts'
+import { parseReminderTime, type ButlerTiming } from './time-parse.ts'
 import {
   PROFILE_FILE,
   VAULT_HOME,
@@ -68,6 +69,22 @@ import {
   writeBytes,
   writeText,
 } from './vault.ts'
+
+/**
+ * Map one parsed natural-language timing onto the scheduler's 0.2.2 union.
+ *
+ * Parsing stays in {@link parseReminderTime}; this only names the fields the
+ * scheduler expects, so a future timing variant fails typecheck instead of
+ * silently dropping a recurrence.
+ */
+function scheduleTimingOf(timing: ButlerTiming): ScheduleTiming {
+  switch (timing.kind) {
+    case 'at': return { kind: 'at', at: timing.local }
+    case 'after': return { kind: 'after', after_seconds: timing.afterSeconds }
+    case 'daily': return { kind: 'daily', daily: { time: timing.time, time_zone: timing.time_zone } }
+    case 'weekly': return { kind: 'weekly', weekly: { time: timing.time, time_zone: timing.time_zone, weekdays: timing.weekdays } }
+  }
+}
 
 /** Services the tools need at call time. */
 export interface ToolDeps {
@@ -658,7 +675,7 @@ export function registerButlerTools(
       action: { type: 'string', required: true, enum: ['create', 'list', 'cancel', 'history'], description: 'create 新建，list 查，cancel 取消，history 看送达记录。' },
       title: { type: 'string', description: '提醒标题（必填，调度服务要求）。' },
       prompt: { type: 'string', description: '到点要说的内容。' },
-      when: { type: 'string', description: '用户原话里的时间描述；支持明确数字相对时间，例如"从现在起60秒后"、"2分钟后"、"1小时后"。' },
+      when: { type: 'string', description: '用户原话里的时间描述，支持自然语言：今晚8点、明天上午9点半、后天下午3点、周五晚上7点、11月8日20:00、20分钟后、每天20:00、每周一三五 20:00。缺日期/钟点时返回 needsClarification 并说明缺什么。' },
       at: { type: 'string', description: '已确认的具体时间，ISO 或 YYYY-MM-DDTHH:mm。给了就按这个建。' },
       timing: {
         type: 'object',
@@ -715,22 +732,50 @@ export function registerButlerTools(
         const title = String(args['title'] ?? '').trim()
         if (title === '') throw new GuardRefusal('remind.no_title', '提醒必须给标题。')
         const at = typeof args['at'] === 'string' && args['at'].trim() !== '' ? args['at'].trim() : undefined
-        // P1 hook: a validated 0.2.2 timing object may be passed through as-is.
-        // Natural language → timing parsing is deliberately not done here yet.
+        // Structured 0.2.2 timing may be passed through as-is (calendar/automation callers).
         const timingArg = typeof args['timing'] === 'object' && args['timing'] !== null && !Array.isArray(args['timing'])
           ? args['timing'] as ScheduleTiming : undefined
         const heardWhen = typeof args['when'] === 'string' && args['when'].trim() !== '' ? args['when'].trim() : undefined
         if (timingArg !== undefined && (at !== undefined || heardWhen !== undefined)) {
           throw new GuardRefusal('remind.conflicting_time', '结构化 timing 与 at/when 只能提供一种，提醒未建立。')
         }
-        const relative = timingArg === undefined && at === undefined && heardWhen !== undefined
+        // Natural language: parse "今晚8点 / 明天上午9点半 / 每周一三五 20:00 /
+        // 20分钟后 / 每天20:00" into concrete timing; never guess a missing unit.
+        // When the owner phrase is the only time evidence, ask instead of inventing.
+        const phrase = heardWhen ?? (typeof args['originalText'] === 'string' && args['originalText'].trim() !== ''
+          ? args['originalText'].trim() : undefined)
+        let parsedTiming: ScheduleTiming | undefined
+        let timeNotes: string[] = []
+        let timeConfidence: 'exact' | 'defaulted' | undefined
+        if (timingArg === undefined && at === undefined && phrase !== undefined) {
+          const parsed = parseReminderTime(phrase, { timeZone: deps.timeZone })
+          if (parsed.timing === undefined) {
+            const reason = parsed.ambiguous?.reason ?? '时间不明确'
+            const missing = parsed.ambiguous?.missing ?? ['具体日期与钟点']
+            return {
+              ok: true,
+              needsClarification: true,
+              question: `时间还不够确定：${reason}。请补充${missing.join('、')}（例如"今晚8点""明天上午9:30""每周一20:00"）。`,
+              note: '时间不明确，先按"待定"记着，问清楚再设。绝不自作主张定时。',
+              heard: phrase,
+              missing,
+              draft: { title, prompt: String(args['prompt'] ?? title), heard: phrase },
+            }
+          }
+          parsedTiming = scheduleTimingOf(parsed.timing)
+          timeNotes = parsed.notes
+          timeConfidence = parsed.confidence
+        }
+        // Legacy relative path kept for callers that only pass an explicit count.
+        const relative = timingArg === undefined && parsedTiming === undefined && at === undefined && heardWhen !== undefined
           ? /^(?:从现在起|从现在开始|现在起)?\s*(\d+(?:\.\d+)?)\s*(秒钟?|分钟?|小时)\s*(?:之|以)?后$/.exec(heardWhen) : null
         const afterSeconds = relative ? Number(relative[1]) * (relative[2]!.startsWith('秒') ? 1 : relative[2]!.startsWith('分') ? 60 : 3600) : undefined
         if (afterSeconds !== undefined && (afterSeconds <= 0 || !Number.isSafeInteger(afterSeconds * 1000))) {
           throw new GuardRefusal('remind.invalid_time', '相对提醒时间必须是有效的正数秒数、分钟数或小时数。')
         }
-        const vague = timingArg !== undefined || afterSeconds !== undefined ? undefined : clarifyTime(String(args['originalText'] ?? args['when'] ?? title), at)
-          ?? (at === undefined ? '什么时候提醒你？请给出具体日期时间，或明确的数字秒、分钟、小时后。' : undefined)
+        const vague = timingArg !== undefined || parsedTiming !== undefined || afterSeconds !== undefined ? undefined
+          : clarifyTime(String(args['originalText'] ?? args['when'] ?? title), at)
+            ?? (at === undefined ? '什么时候提醒你？请给出具体日期时间，或明确的数字秒、分钟、小时后。' : undefined)
         if (vague !== undefined) {
           return {
             ok: true,
@@ -744,13 +789,17 @@ export function registerButlerTools(
         const identity = deps.executionContext?.current()
         if (!identity || !deps.reminderOperations) throw new GuardRefusal('remind.operations_unavailable', '提醒操作记录服务不可用，提醒未建立。')
         const outcome = await deps.reminderOperations.create({ identity, reminder: { title, prompt: String(args['prompt'] ?? title),
-          ...(timingArg !== undefined ? { timing: timingArg } : afterSeconds === undefined ? { at } : { afterSeconds }), timeZone: deps.timeZone } })
+          ...(timingArg !== undefined ? { timing: timingArg }
+            : parsedTiming !== undefined ? { timing: parsedTiming }
+              : afterSeconds === undefined ? { at } : { afterSeconds }), timeZone: deps.timeZone } })
         let persistedTask = outcome.task
         if (!persistedTask && outcome.taskId) {
           try { persistedTask = getTask(outcome.taskId) } catch { /* Preserve the original create/storage failure. */ }
         }
         if (persistedTask && persistedTask.id === outcome.taskId) deps.executionContext?.activate(persistedTask.id)
-        return { ...outcome, task: outcome.task ? taskView(outcome.task) : null, tz: deps.timeZone }
+        return { ...outcome, task: outcome.task ? taskView(outcome.task) : null, tz: deps.timeZone,
+          ...(timeNotes.length === 0 ? {} : { timeNotes }),
+          ...(timeConfidence === undefined ? {} : { timeConfidence }) }
       })
       return result
     },
