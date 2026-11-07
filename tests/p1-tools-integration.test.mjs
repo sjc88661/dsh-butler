@@ -244,3 +244,19 @@ test('butler_pdf fetch stores a real public PDF and refuses a landing page', asy
     server.close()
   }
 })
+
+test('butler_pdf note:true turns a read PDF into a page-anchored note draft with citation', async () => {
+  const e = environment()
+  const source = join(home, 'note-draft.pdf')
+  writeFileSync(source, fourPagePdf())
+  const result = await e.call('butler_pdf', { action: 'ingest', path: source, note: true,
+    citation: { title: '酶稳定性', authors: ['Zhang San'], year: 2024, journal: 'JES', doi: '10.1234/x', url: 'https://example.org/p' } })
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.match(result.noteDraft, /^# 酶稳定性/)
+  assert.match(result.noteDraft, /> 引用：Zhang San · 酶稳定性 \(2024\)/)
+  assert.match(result.noteDraft, /## p\.1\n\nFIRST PHYSICAL PAGE/)
+  assert.match(result.noteDraft, /doi:10\.1234\/x/)
+  assert.match(result.noteDraft, /```bibtex/)
+  assert.match(result.citation.plain, /doi:10\.1234\/x/)
+  assert.match(result.citation.bibtex, /^@article\{/)
+})

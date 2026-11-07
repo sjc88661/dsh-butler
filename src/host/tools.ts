@@ -49,6 +49,7 @@ import {
 } from './ledger.ts'
 import { readPdfFile, readPdfTextCached, pageAnchors } from './pdf.ts'
 import { fetchPdfBytes } from './fetch-pdf.ts'
+import { formatBibtex, formatPlainCitation, formatRis, noteDraft, type PaperCitation } from './citation.ts'
 import { findNotes, noteHistory, readNote, writeNote } from './notes.ts'
 import { searchLiterature, verifyRecords, type LiteratureRecord } from './literature.ts'
 import { exportLiterature } from './literature-export.ts'
@@ -63,6 +64,7 @@ import {
   VAULT_HOME,
   ensureVault,
   listFiles,
+  localDate,
   readText,
   sha256,
   statePath,
@@ -553,6 +555,8 @@ export function registerButlerTools(
       taskId: { type: 'string', description: '关联的任务 id。' },
       pages: { type: 'array', items: { type: 'integer' }, description: 'read 指定真实物理页码；不指定默认返回前 3 页片段。' },
       fullText: { type: 'boolean', description: 'read 时请求全部可解析页；超出返回上限会明确降级。' },
+      note: { type: 'boolean', description: '生成按页笔记草稿（每页标 PDF 物理页 + 引用信息），可直接交给 butler_note write。' },
+      citation: { type: 'object', description: '可选文献元数据：{title, authors:[], year, journal, doi, url}；只用于引用/笔记草稿，不编造缺失字段。' },
     },
     output: {
       schema: { type: 'object', additionalProperties: true },
@@ -612,6 +616,20 @@ export function registerButlerTools(
         const complete = parsed.complete && returnedPages.length === parsed.pages.length
           && returnedPages.every((page, index) => page.text === parsed.pages[index]?.text)
         const anchors = pageAnchors({ ...parsed, pages: returnedPages })
+        const citation = typeof args['citation'] === 'object' && args['citation'] !== null && !Array.isArray(args['citation'])
+          ? args['citation'] as PaperCitation : undefined
+        const draft = args['note'] === true
+          ? noteDraft({
+            title: citation?.title ?? name,
+            ...(citation === undefined ? {} : { citation }),
+            pages: returnedPages.map(page => ({ page: page.page, text: page.text, ...(page.status === undefined ? {} : { status: page.status }) })),
+            origin,
+            ...(stored === undefined ? {} : { storedPath: stored }),
+            sha256: hash,
+            ...(parsed.declaredPages === undefined ? {} : { declaredPages: parsed.declaredPages }),
+            date: localDate(new Date(), deps.timeZone),
+          })
+          : undefined
         return {
           ok: true,
           storedPath: stored ?? null,
@@ -625,6 +643,8 @@ export function registerButlerTools(
           anchors,
           returnedPages,
           fullTextAvailable: complete && parsed.textLayer,
+          ...(citation === undefined ? {} : { citation: { plain: formatPlainCitation(citation), bibtex: formatBibtex(citation), ris: formatRis(citation) } }),
+          ...(draft === undefined ? {} : { noteDraft: draft }),
           limitations: [
             ...parsed.limitations,
             ...parsed.cache.warnings,
