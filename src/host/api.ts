@@ -562,6 +562,34 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
       },
     }),
     server.register({
+      // Small, pollable slice for the frame-wide reminder overlay: due rules only,
+      // so the overlay does not re-download the whole dashboard on every tick.
+      kind: 'exact',
+      path: `${API_PREFIX}/due`,
+      handler: async (req, res) => {
+        if ((req.method ?? 'GET').toUpperCase() !== 'GET') { sendJson(res, 405, { ok: false, error: '到期提醒只支持 GET' }); return }
+        const now = Date.now()
+        if (deps.schedule === undefined) {
+          sendJson(res, 200, { ok: true, available: false, generatedAt: new Date(now).toISOString(), timeZone: deps.timeZone, count: 0, due: [],
+            reason: '调度服务不可用；这不代表没有提醒。' })
+          return
+        }
+        try {
+          const due = (await deps.schedule.catalog()).map(projectReminder)
+            .filter(row => row.status === 'active' && typeof row.scheduledAt === 'string' && Number.isFinite(Date.parse(row.scheduledAt))
+              && Date.parse(row.scheduledAt) <= now)
+            .sort((left, right) => (left.scheduledAt ?? '').localeCompare(right.scheduledAt ?? ''))
+            .map(row => ({ id: row.id, title: row.title ?? row.prompt ?? row.id, scheduledAt: row.scheduledAt,
+              ...(row.kind === undefined ? {} : { kind: row.kind }),
+              ...(row.lastDelivery === undefined ? {} : { lastDelivery: row.lastDelivery }) }))
+          sendJson(res, 200, { ok: true, available: true, generatedAt: new Date(now).toISOString(), timeZone: deps.timeZone, count: due.length, due })
+        } catch (error) {
+          sendJson(res, 200, { ok: true, available: false, generatedAt: new Date(now).toISOString(), timeZone: deps.timeZone, count: 0, due: [],
+            reason: errorText(error) })
+        }
+      },
+    }),
+    server.register({
       // The workbench's one-click bookkeeping. Deliberately narrow: status and
       // due-date changes on the owner's own ledger, audited by an operation id.
       // External actions (messages, payments) never travel through this route.

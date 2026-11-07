@@ -188,6 +188,35 @@ async function getJson(path: string, signal?: AbortSignal): Promise<unknown> {
   return value
 }
 
+/** One due reminder as the frame-wide overlay consumes it. */
+export interface DueReminder {
+  id: string
+  title: string
+  scheduledAt?: string
+  kind?: string
+  lastDelivery?: { scheduledAt?: string; deliveredAt?: string; messageId?: string; targetSessionId?: string }
+}
+
+/** The small pollable slice returned by `GET /api/due`. */
+export interface DueReminderPayload {
+  ok: boolean
+  available: boolean
+  generatedAt: string
+  timeZone: string
+  count: number
+  due: DueReminder[]
+  reason?: string
+}
+
+/**
+ * Read the due-reminder slice for the frame-wide overlay.
+ * @param signal - abort signal for the caller's lifetime.
+ * @returns the due reminders, or an explicit unavailability reason.
+ */
+export async function fetchDueReminders(signal?: AbortSignal): Promise<DueReminderPayload> {
+  return await getJson(`${API_PREFIX}/due`, signal) as DueReminderPayload
+}
+
 /**
  * Read the whole workbench snapshot.
  * @param signal - abort signal for the caller's lifetime.

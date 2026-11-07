@@ -10,6 +10,7 @@
  *   `conversation.view`（id butler）       与工作台同一组件，放进对话视图页签
  *   `conversation.input.dock`              参考范围条：只在管家主题会话渲染
  *   `sidebar.right.pane.tab`               右栏「管家资料」页签
+ *   `shell.overlay`                        到期提醒浮层（任意页面可见）
  *
  * 「对话来源」原来单独占一个侧栏行 + 一个 main 页；现在合并进工作台页与右栏，
  * 侧栏不再出现两个同样式、只差跳转目标的入口。
@@ -26,6 +27,7 @@ import { ButlerPanelIcon } from './icon.ts'
 import { PANEL_ID, PANEL_ORDER } from './ids.ts'
 import { ButlerWorkbench } from './panel.ts'
 import { clientService } from './navigate.ts'
+import { ButlerReminderOverlay } from './reminder-overlay.ts'
 import { ButlerRightPane, ButlerSourceDock, ButlerWorkspacePage } from './workspace-panel.ts'
 
 /** Required core services; optional native workspace/rightbar faces are resolved per action. */
@@ -127,6 +129,18 @@ export function apply(ctx: Context): void {
       return slots.register({ name: 'conversation.input.dock', id: 'butler-reference-scope', order: 65, inject: () => ({ ctx }) }, ButlerSourceDock as never)
     } catch (error) {
       console.error('[dsh-butler] 参考范围输入栏 注册失败：', error)
+      return () => {}
+    }
+  }))
+
+  disposers.push(slots.inject('shell.overlay', () => {
+    try {
+      // Frame-wide seat: reminders stay visible on any page, not only inside the
+      // workbench. An unavailable seat simply never calls this and the overlay is
+      // absent; the workbench banner still covers the in-dashboard case.
+      return slots.register({ name: 'shell.overlay', id: 'butler-reminder-overlay', order: 20, label: () => '到期提醒', inject: () => ({ ctx }) }, ButlerReminderOverlay as never)
+    } catch (error) {
+      console.error('[dsh-butler] 到期提醒浮层 注册失败：', error)
       return () => {}
     }
   }))

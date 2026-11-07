@@ -608,3 +608,30 @@ test('task action route refuses archived fixtures instead of rewriting the archi
     e.dispose()
   }
 })
+
+test('due reminder slice returns only active overdue rules and reports scheduler availability', async () => {
+  const now = Date.now()
+  const catalog = [
+    { id: 'due-overdue', title: '吃药', kind: 'at', scheduledAt: new Date(now - 60000).toISOString(), status: 'active', target: { kind: 'session', sessionId: 's' } },
+    { id: 'due-future', title: '未来的提醒', kind: 'at', scheduledAt: new Date(now + 3600000).toISOString(), status: 'active', target: { kind: 'session', sessionId: 's' } },
+    { id: 'due-ended', title: '已结束', scheduledAt: new Date(now - 60000).toISOString(), status: 'ended' },
+    { id: 'due-paused', title: '暂停', scheduledAt: new Date(now - 60000).toISOString(), status: 'paused' },
+  ]
+  const schedule = { catalog: async () => catalog, history: async () => ({ id: 'x', records: [] }) }
+  const e = api({ schedule })
+  try {
+    const response = await e.request('/dsh-butler/api/due')
+    assert.equal(response.status, 200)
+    assert.equal(response.body.available, true)
+    assert.deepEqual(response.body.due.map(row => row.id), ['due-overdue'])
+    assert.equal(response.body.count, 1)
+  } finally { e.dispose() }
+  const unavailable = api()
+  try {
+    const response = await unavailable.request('/dsh-butler/api/due')
+    assert.equal(response.status, 200)
+    assert.equal(response.body.available, false)
+    assert.deepEqual(response.body.due, [])
+    assert.match(response.body.reason, /调度服务不可用/)
+  } finally { unavailable.dispose() }
+})
