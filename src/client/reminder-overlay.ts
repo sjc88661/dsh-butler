@@ -12,7 +12,7 @@
  */
 import { createElement as h, useEffect, useState } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
-import { fetchDueReminders, type DueReminder } from './api.ts'
+import { fetchDueReminders, reminderAction, type DueReminder } from './api.ts'
 import { openButlerConversation } from './navigate.ts'
 import { BUTLER_COLORS, BUTLER_SPACE } from './ui/index.ts'
 import { documentHidden, onDocumentVisible } from './visibility.ts'
@@ -59,6 +59,7 @@ const wrapStyle = {
   position: 'fixed', right: '16px', bottom: '16px', zIndex: 2147483000,
   display: 'flex', flexDirection: 'column', gap: BUTLER_SPACE.sm, maxWidth: '340px',
 } as const
+
 const cardStyle = {
   background: BUTLER_COLORS.bgOverlay, color: BUTLER_COLORS.labelPrimary,
   border: `1px solid ${BUTLER_COLORS.warn}`, borderRadius: '10px', padding: `${BUTLER_SPACE.sm} ${BUTLER_SPACE.md}`,
@@ -102,13 +103,30 @@ export function ButlerReminderOverlay(props: ReminderOverlayProps): unknown {
     setDismissed(next)
     writeDismissed(next)
   }
+  /** Recurring rules cannot be snoozed into a single instant; only one-shots can. */
+  const oneShot = (record: DueReminder): boolean =>
+    record.kind !== 'daily' && record.kind !== 'weekly' && record.kind !== 'cron' && record.kind !== 'rrule'
+  const act = (record: DueReminder, action: 'snooze' | 'complete'): void => {
+    void (async () => {
+      try {
+        const result = await reminderAction(action, record.id, action === 'snooze' ? { minutes: 10 } : {})
+        if (!result.ok) { setProblem(result.error ?? '提醒操作失败'); return }
+        setProblem(null)
+        setDue(previous => previous.filter(row => row.id !== record.id))
+      } catch (cause) { setProblem(cause instanceof Error ? cause.message : String(cause)) }
+    })()
+  }
   return h('div', { 'data-dsh-butler-overlay': '', role: 'status', 'aria-label': `到期提醒 ${shown.length} 条`, style: wrapStyle },
     ...shown.map(record => h('div', { key: dueCardKey(record), style: cardStyle },
       h('div', { style: { fontWeight: 600, fontSize: '13px', lineHeight: '20px', overflowWrap: 'anywhere' } }, `提醒：${record.title}`),
       h('div', { style: { color: BUTLER_COLORS.labelSecondary, fontSize: '12px', lineHeight: '18px' } },
         record.scheduledAt === undefined ? '计划时间未知' : `计划 ${new Date(record.scheduledAt).toLocaleString('zh-CN')}`),
       problem === null ? null : h('div', { style: { color: BUTLER_COLORS.warn, fontSize: '12px' } }, problem),
-      h('div', { style: { display: 'flex', gap: BUTLER_SPACE.xs, justifyContent: 'flex-end' } },
+      h('div', { style: { display: 'flex', gap: BUTLER_SPACE.xs, justifyContent: 'flex-end', flexWrap: 'wrap' } },
+        oneShot(record) ? h('button', { type: 'button', className: 'butler-btn butler-btn--ghost butler-btn--sm',
+          'aria-label': `稍后10分钟：${record.title}`, onClick: () => act(record, 'snooze') }, '稍后10分') : null,
+        h('button', { type: 'button', className: 'butler-btn butler-btn--ghost butler-btn--sm',
+          'aria-label': `完成提醒：${record.title}`, onClick: () => act(record, 'complete') }, '完成'),
         h('button', { type: 'button', className: 'butler-btn butler-btn--ghost butler-btn--sm',
           'aria-label': `知道了：${record.title}`, onClick: () => acknowledge(record) }, '知道了'),
         h('button', { type: 'button', className: 'butler-btn butler-btn--secondary butler-btn--sm',

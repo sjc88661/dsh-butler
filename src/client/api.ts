@@ -138,6 +138,12 @@ export interface ReminderRecord {
   scheduledAt?: string
   /** Whether it is still armed. */
   status?: 'active' | 'inactive'
+  /** Native 0.2.2 rule kind (at/daily/weekly/...), kept so the UI can tell one-shots from recurrences. */
+  kind?: string
+  /** Native status before the host normalised it. */
+  rawStatus?: string
+  /** Delivery destination derived from the native target. */
+  sessionId?: string
   /** Last delivery receipt, when it already fired. */
   lastDelivery?: { scheduledAt: string; deliveredAt: string; messageId: string }
 }
@@ -206,6 +212,47 @@ export interface DueReminderPayload {
   count: number
   due: DueReminder[]
   reason?: string
+}
+
+/** One reminder rule change the overlay/banner may request. */
+export type ReminderActionName = 'snooze' | 'reschedule' | 'complete' | 'cancel' | 'pause' | 'resume'
+
+/** What one reminder action changed. */
+export interface ReminderActionResult {
+  ok: boolean
+  action?: string
+  scheduleId?: string
+  schedule?: unknown
+  task?: { id: string; title: string; status: string } | null
+  error?: string
+  code?: string
+}
+
+/**
+ * Change one reminder rule (snooze/reschedule/complete/cancel/pause/resume).
+ *
+ * The scheduler stays the authority; the host mirrors the change into the linked
+ * ledger task. This never sends messages or spends money.
+ * @param action - the rule change.
+ * @param id - native schedule id.
+ * @param options - snooze minutes or an ISO instant for reschedule.
+ * @param signal - abort signal for the caller's lifetime.
+ * @returns the host's answer, including a refusal reason.
+ */
+export async function reminderAction(action: ReminderActionName, id: string,
+  options: { minutes?: number; at?: string } = {}, signal?: AbortSignal): Promise<ReminderActionResult> {
+  const response = await fetch(`${API_PREFIX}/reminder-action`, {
+    method: 'POST', signal,
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ action, id, ...(options.minutes === undefined ? {} : { minutes: options.minutes }), ...(options.at === undefined ? {} : { at: options.at }) }),
+  })
+  let payload: unknown
+  try { payload = await response.json() } catch { payload = undefined }
+  const record = payload !== null && typeof payload === 'object' ? payload as Record<string, unknown> : undefined
+  if (!response.ok || record?.['ok'] !== true) {
+    return { ok: false, error: typeof record?.['error'] === 'string' ? record['error'] : `HTTP ${response.status}`, ...(typeof record?.['code'] === 'string' ? { code: record['code'] } : {}) }
+  }
+  return record as unknown as ReminderActionResult
 }
 
 /**

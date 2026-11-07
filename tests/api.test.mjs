@@ -635,3 +635,48 @@ test('due reminder slice returns only active overdue rules and reports scheduler
     assert.match(response.body.reason, /调度服务不可用/)
   } finally { unavailable.dispose() }
 })
+
+test('reminder action route snoozes one-shot rules, refuses recurring edits and reports missing rules', async () => {
+  const edits = []
+  const row = { id: 'rem-one-shot', kind: 'at', title: '吃药', prompt: '吃药', scheduledAt: '2026-11-07T04:00:00.000Z',
+    status: 'active', updatedAt: '2026-11-07T04:00:00.000Z', target: { kind: 'session', sessionId: 's' } }
+  const schedule = {
+    catalog: async () => [row, { ...row, id: 'rem-daily', kind: 'daily', daily: { time: '20:00', time_zone: 'Asia/Shanghai' } }],
+    history: async () => ({ id: 'x', records: [] }),
+    edit: async request => {
+      edits.push(request)
+      if (request.action === 'delete') return { id: request.id, deleted: true }
+      return { ...row, id: request.id, updatedAt: '2026-11-07T05:00:00.000Z', ...(request.patch.timing === undefined ? {} : { kind: 'at' }) }
+    },
+  }
+  const e = api({ schedule })
+  try {
+    const before = Date.now()
+    const snoozed = await e.request('/dsh-butler/api/reminder-action', 'POST', { action: 'snooze', id: 'rem-one-shot', minutes: 10 })
+    assert.equal(snoozed.status, 200)
+    assert.equal(snoozed.body.ok, true)
+    const edit = edits[0]
+    assert.equal(edit.action, 'update')
+    assert.equal(edit.patch.timing.kind, 'at')
+    const when = Date.parse(edit.patch.timing.at)
+    assert.ok(when >= before + 9 * 60000 && when <= Date.now() + 11 * 60000, 'snooze lands ~10 minutes ahead')
+    assert.equal(edit.expectedUpdatedAt, row.updatedAt)
+
+    const recurring = await e.request('/dsh-butler/api/reminder-action', 'POST', { action: 'snooze', id: 'rem-daily' })
+    assert.equal(recurring.status, 409)
+    assert.match(recurring.body.error, /重复提醒/)
+
+    const completed = await e.request('/dsh-butler/api/reminder-action', 'POST', { action: 'complete', id: 'rem-one-shot' })
+    assert.equal(completed.status, 200)
+    assert.equal(edits.at(-1).action, 'delete')
+
+    assert.equal((await e.request('/dsh-butler/api/reminder-action', 'POST', { action: 'snooze', id: 'missing-rule' })).status, 404)
+    assert.equal((await e.request('/dsh-butler/api/reminder-action', 'POST', { action: 'explode', id: 'rem-one-shot' })).status, 400)
+    assert.equal((await e.request('/dsh-butler/api/reminder-action', 'GET')).status, 405)
+  } finally { e.dispose() }
+
+  const noEdit = api({ schedule: { catalog: async () => [row], history: async () => ({ id: 'x', records: [] }) } })
+  try {
+    assert.equal((await noEdit.request('/dsh-butler/api/reminder-action', 'POST', { action: 'complete', id: 'rem-one-shot' })).status, 503)
+  } finally { noEdit.dispose() }
+})

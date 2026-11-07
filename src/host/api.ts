@@ -77,6 +77,8 @@ export interface ButlerApiDeps {
   schedule?: {
     catalog(): Promise<ScheduleCatalogEntry[]> | ScheduleCatalogEntry[]
     history?: ScheduleService['history']
+    /** Mutating scheduler entry point, used only by the reminder action route. */
+    edit?: ScheduleService['edit']
   }
   /**
    * Which borrowed services resolved on this request.
@@ -627,6 +629,79 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
           sendJson(res, 200, { ok: true, action, task: {
             id: updated.id, title: updated.title, status: updated.status, updatedAt: updated.updatedAt,
             ...(updated.dueAt === undefined ? {} : { dueAt: updated.dueAt }),
+          } })
+        } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
+      },
+    }),
+    server.register({
+      // Reminder rule changes requested from the overlay/banner. The scheduler is
+      // the authority on the rule; the linked ledger task is mirrored so the
+      // workbench stays truthful. One-shot rules may be snoozed/rescheduled;
+      // recurring rules only allow pause/resume/complete (their timing is a
+      // recurrence, not a single instant).
+      kind: 'exact',
+      path: `${API_PREFIX}/reminder-action`,
+      handler: async (req, res) => {
+        if ((req.method ?? 'GET').toUpperCase() !== 'POST') { sendJson(res, 405, { ok: false, error: '提醒操作只支持 POST' }); return }
+        let raw: unknown
+        try { raw = JSON.parse(await readBody(req)) } catch (error) {
+          sendJson(res, 400, { ok: false, error: `请求体不是有效 JSON：${errorText(error)}` }); return
+        }
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) { sendJson(res, 400, { ok: false, error: '请求体必须是对象' }); return }
+        const body = raw as Record<string, unknown>
+        const action = typeof body.action === 'string' ? body.action : ''
+        const id = typeof body.id === 'string' ? body.id.trim() : ''
+        const allowed = new Set(['snooze', 'reschedule', 'complete', 'cancel', 'pause', 'resume'])
+        if (!allowed.has(action)) { sendJson(res, 400, { ok: false, error: `不支持的提醒操作：${action || '(空)'}` }); return }
+        if (id === '' || id.length > 256) { sendJson(res, 400, { ok: false, error: '提醒 ID 无效' }); return }
+        if (archivedReminderKeys().has(id)) { sendJson(res, 409, { ok: false, error: '这是已归档的验收 fixture，工作台不修改它。' }); return }
+        if (deps.schedule === undefined || deps.schedule.edit === undefined) {
+          sendJson(res, 503, { ok: false, error: '宿主未提供 schedule.edit，无法修改提醒（提醒本身不受影响）' }); return
+        }
+        try {
+          const row = (await deps.schedule.catalog()).find(entry => entry.id === id)
+          if (row === undefined) { sendJson(res, 404, { ok: false, error: '没有这条提醒' }); return }
+          const recurring = row.kind === 'daily' || row.kind === 'weekly' || row.kind === 'cron' || row.kind === 'rrule'
+          const expectedUpdatedAt = row.updatedAt
+          let dueAt: string | undefined
+          let result: unknown
+          if (action === 'snooze') {
+            if (recurring) { sendJson(res, 409, { ok: false, error: '这是重复提醒：不能单次推迟；请改期或先停用/完成。' }); return }
+            const minutes = typeof body.minutes === 'number' && Number.isFinite(body.minutes) ? Math.min(1440, Math.max(1, Math.floor(body.minutes))) : 10
+            dueAt = new Date(Date.now() + minutes * 60000).toISOString()
+            result = await deps.schedule.edit({ id, action: 'update', patch: { timing: { kind: 'at', at: dueAt } }, ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }) })
+          } else if (action === 'reschedule') {
+            if (recurring) { sendJson(res, 409, { ok: false, error: '这是重复提醒：不能改成单次时间；请改它的重复规则或先完成。' }); return }
+            const requested = typeof body.at === 'string' ? Date.parse(body.at) : Number.NaN
+            if (!Number.isFinite(requested)) { sendJson(res, 400, { ok: false, error: 'reschedule 需要有效 at（ISO 时间）' }); return }
+            dueAt = new Date(requested).toISOString()
+            result = await deps.schedule.edit({ id, action: 'update', patch: { timing: { kind: 'at', at: dueAt } }, ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }) })
+          } else if (action === 'complete' || action === 'cancel') {
+            result = await deps.schedule.edit({ id, action: 'delete', ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }) })
+          } else {
+            result = await deps.schedule.edit({ id, action: 'update', patch: { active: action === 'resume' }, ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }) })
+          }
+          const record = result !== null && typeof result === 'object' ? result as Record<string, unknown> : {}
+          if (typeof record['code'] === 'string') {
+            sendJson(res, 409, { ok: false, error: record['code'] === 'schedule_conflict'
+              ? '提醒已被别处修改，请刷新后重试。' : '宿主讲这条提醒不存在，可能已被删除。', code: record['code'] })
+            return
+          }
+          if (record['deleted'] === false) { sendJson(res, 409, { ok: false, error: '宿主讲提醒不存在，可能已被删除。', code: 'schedule_not_found' }); return }
+          // Mirror the rule change into the linked task row (if any).
+          const linked = listTasks(READ_ONLY).find(task => task.reminder?.scheduleId === id)
+          let task: unknown = null
+          if (linked !== undefined) {
+            const operation = { operationId: `web-reminder-${action}-${id}-${randomUUID()}` }
+            if (action === 'complete') task = setTaskStatus(linked.id, 'done', '提醒已完成（工作台删除规则）', deps.timeZone, operation)
+            else if (action === 'cancel') task = setTaskStatus(linked.id, 'cancelled', '提醒已取消（工作台删除规则）', deps.timeZone, operation)
+            else if (action === 'pause') task = setTaskStatus(linked.id, 'waiting_review', '提醒已停用（可在工作台恢复）', deps.timeZone, operation)
+            else if (action === 'snooze' || action === 'reschedule') {
+              task = upsertTask(linked.id, { status: 'pending', ...(dueAt === undefined ? {} : { dueAt }) }, operation)
+            }
+          }
+          sendJson(res, 200, { ok: true, action, scheduleId: id, schedule: record, task: task === null ? null : {
+            id: (task as { id: string }).id, title: (task as { title: string }).title, status: (task as { status: string }).status,
           } })
         } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
       },

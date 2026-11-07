@@ -35,8 +35,8 @@
 import { createElement as h, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import {
-  fetchNote, fetchOverview, fetchTask, taskAction,
-  type Memo, type NoteEntry, type NoteResult, type Overview, type PendingItem, type TaskDetail,
+  fetchNote, fetchOverview, fetchTask, reminderAction, taskAction,
+  type Memo, type NoteEntry, type NoteResult, type Overview, type PendingItem, type ReminderRecord, type TaskDetail,
 } from './api.ts'
 import { PANEL_ID } from './ids.ts'
 import { shortTime } from './view.ts'
@@ -110,8 +110,7 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
   }
 
   /** One-click local bookkeeping; external actions never come through here. */
-  const applyTaskAction: TaskActionHandler = (action, task) => {
-    void (async () => {
+  const applyTaskAction: TaskActionHandler = (action, task) => {    void (async () => {
       try {
         const result = await taskAction(action, task.id)
         if (!result.ok) { notify('error', `操作失败：${result.error ?? '未知原因'}`); return }
@@ -121,6 +120,19 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
       } catch (cause) {
         notify('error', `操作失败：${cause instanceof Error ? cause.message : String(cause)}`)
       }
+    })()
+  }
+
+  /** Due-reminder quick actions from the banner; the scheduler stays authority. */
+  const applyReminderAction = (record: ReminderRecord, action: 'snooze' | 'complete'): void => {
+    void (async () => {
+      try {
+        const result = await reminderAction(action, record.id, action === 'snooze' ? { minutes: 10 } : {})
+        if (!result.ok) { notify('error', `提醒操作失败：${result.error ?? '未知原因'}`); return }
+        notify('success', action === 'snooze' ? `已推迟 10 分钟：${record.title ?? record.id}` : `已完成提醒：${record.title ?? record.id}`)
+        setDismissedDue(previous => ({ ...previous, [String(record.id)]: true }))
+        await load()
+      } catch (cause) { notify('error', `提醒操作失败：${cause instanceof Error ? cause.message : String(cause)}`) }
     })()
   }
 
@@ -296,6 +308,13 @@ export function ButlerWorkbench(props: { ctx?: Context; initialTaskId?: string }
   },
   h('span', { style: { flex: '1 1 auto', overflowWrap: 'anywhere' } },
     `${record.title ?? record.prompt ?? record.id} · 计划 ${shortTime(record.scheduledAt as string)}`),
+  record.kind === 'daily' || record.kind === 'weekly' || record.kind === 'cron' || record.kind === 'rrule' ? null
+    : h('button', { type: 'button', className: 'butler-btn butler-btn--ghost butler-btn--sm',
+      'aria-label': `稍后10分钟：${record.title ?? record.id}`,
+      onClick: () => applyReminderAction(record, 'snooze') }, '稍后10分'),
+  h('button', { type: 'button', className: 'butler-btn butler-btn--ghost butler-btn--sm',
+    'aria-label': `完成提醒：${record.title ?? record.id}`,
+    onClick: () => applyReminderAction(record, 'complete') }, '完成'),
   h('button', { type: 'button', className: 'butler-btn butler-btn--ghost butler-btn--sm',
     'aria-label': `知道了：${record.title ?? record.id}`,
     onClick: () => setDismissedDue(previous => ({ ...previous, [String(record.id)]: true })) }, '知道了'))))

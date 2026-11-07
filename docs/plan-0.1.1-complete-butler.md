@@ -48,7 +48,8 @@
 - [x] 工作台可操作（第一版）：任务行内「完成 / 改期 +24h / 取消」一键操作；宿主 `POST /api/action` 只改本地账本（operationId 审计），归档 fixture 拒绝修改（409）；客户端 live region 反馈成功/失败；成功即刷新
 - [x] 到期提醒可见：工作台顶部「到期提醒 N 条」条（标题/计划时间/知道了/打开管家会话处理），重新加载仍可见（未处理），已确认的本会话隐藏
 - [x] **框级提醒浮层**（`shell.overlay` 席位）：任意页面右下角显示到期提醒；独立小接口 `GET /api/due`（只返回 active 且已到期的规则）；「知道了」按 occurrence（`id@scheduledAt`）写入 localStorage，重复提醒的下一次仍会出现；60s 轮询 + 不可见不发
-- [ ] 提醒闭环剩余：提醒规则本身的完成/稍后/改期（走 DSH schedule `edit`）、离线补发投递到专属会话、飞书送达
+- [x] **提醒规则操作**：`POST /api/reminder-action`（snooze 10 分钟 / reschedule / complete / cancel / pause / resume）走 DSH `schedule.edit`；一次性规则可推迟/改期，重复规则拒绝单次推迟（提示改期或完成）；同步关联账本任务（完成→done、取消→cancelled、停用→waiting_review、推迟→dueAt）；归档 fixture 409；浮层与工作台横幅都可「稍后10分 / 完成」
+- [ ] 提醒闭环剩余：离线补发投递到专属会话、飞书送达
 - [ ] 飞书通道接线（测试应用先验证：channelOwnerId/bindings；提醒送达；手机问话）
 
 ### P2 知识闭环

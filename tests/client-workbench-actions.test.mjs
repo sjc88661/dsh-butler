@@ -89,7 +89,7 @@ function carrier({ ctx = {}, clipboard } = {}) {
         const method = options.method ?? 'GET'
         // Exactly one mutation is allowed from the panel: the owner's own task
         // bookkeeping. Everything else must stay a read.
-        if (path === '/dsh-butler/api/action') {
+        if (path === '/dsh-butler/api/action' || path === '/dsh-butler/api/reminder-action') {
           assert.equal(method, 'POST', 'Task bookkeeping must use POST')
           assert.ok(typeof options.body === 'string' && options.body.length > 0)
           return new Promise((resolve, reject) => requests.push({ path, method, body: JSON.parse(options.body), signal: options.signal, resolve, reject, replied: false }))
@@ -441,4 +441,23 @@ test('due reminders surface above the zones and can be acknowledged', async () =
   assert.equal(typeof acknowledge?.props?.onClick, 'function', 'Each due reminder can be acknowledged')
   acknowledge.props.onClick(); await e.flush()
   assert.doesNotMatch(text(e.tree), /到期提醒 1 条/, 'Acknowledged reminders leave the banner')
+})
+
+test('a due reminder in the banner can be snoozed or completed through the reminder action route', async () => {
+  const e = carrier(); await e.mount()
+  const due = { id: 'rem-one-shot', kind: 'at', title: '吃药', scheduledAt: '2026-10-21T11:00:00Z', status: 'active' }
+  await e.poll(overview(at, { reminders: [due] }))
+  const complete = nodes(e.tree).find(node => node.props?.['aria-label'] === '完成提醒：吃药')
+  assert.equal(typeof complete?.props?.onClick, 'function', 'A due one-shot reminder can be completed')
+  complete.props.onClick(); await e.flush()
+
+  const actions = e.requests.filter(request => request.path === '/dsh-butler/api/reminder-action')
+  assert.equal(actions.length, 1)
+  assert.deepEqual(actions[0].body, { action: 'complete', id: 'rem-one-shot' })
+  e.reply(actions[0], { ok: true, action: 'complete', scheduleId: 'rem-one-shot', task: null })
+  await e.flush()
+  const refreshed = e.latest(/\/overview$/)
+  assert.ok(refreshed, 'A successful reminder action re-reads the dashboard')
+  e.reply(refreshed, overview(`${at}-reminder-refreshed`, { reminders: [] })); await e.flush()
+  assert.doesNotMatch(text(e.tree), /到期提醒 1 条/)
 })

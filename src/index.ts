@@ -507,6 +507,11 @@ export function apply(ctx: AppContext, config: Config): void {
         if (live === undefined || typeof live.history !== 'function') throw new Error(services.schedule.why() || '原生送达历史不可用')
         return live.history(request)
       },
+      edit: request => {
+        const live = services.schedule.get()
+        if (live === undefined || typeof live.edit !== 'function') throw new Error(services.schedule.why() || '原生 schedule.edit 不可用')
+        return live.edit(request)
+      },
     },
     resolved: () => services.resolved(),
     session: (): Promise<ButlerSessionInfo> => session.ensureReady(),
