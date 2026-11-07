@@ -219,7 +219,7 @@ export interface SettingsPayload {
   ok: boolean
   timeZone: string
   brief: { slots: SettingsBriefSlot[] }
-  feishu: { enabled: boolean; configured: boolean; sent?: number; failed?: number; gaveUp?: number; lastError?: string; lastTickAt?: string }
+  feishu: { enabled: boolean; configured: boolean; credentialSource?: 'config' | 'credentials' | 'none'; sent?: number; failed?: number; gaveUp?: number; lastError?: string; lastTickAt?: string }
   data: { vaultHome: string; stateHome: string; backupHome: string }
   retention: { compaction: { keepNewest: number; days: number; maxBytes: number }; backupKeep: number }
   storage?: unknown

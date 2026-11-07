@@ -51,7 +51,7 @@
 - [x] **提醒规则操作**：`POST /api/reminder-action`（snooze 10 分钟 / reschedule / complete / cancel / pause / resume）走 DSH `schedule.edit`；一次性规则可推迟/改期，重复规则拒绝单次推迟（提示改期或完成）；同步关联账本任务（完成→done、取消→cancelled、停用→waiting_review、推迟→dueAt）；归档 fixture 409；浮层与工作台横幅都可「稍后10分 / 完成」
 - [x] **飞书提醒推送**（宿主自带发送器，不依赖 lark 插件）：`src/host/feishu.ts` 用应用凭据换 tenant token（缓存）→ 只给配置的本人 `open_id` 发文本；`src/host/feishu-reminders.ts` 看门狗只推管家提醒会话（`session-butler-reminder-*`），同一 occurrence 只发一次，失败最多重试 3 次后 gave-up，落盘 `state/feishu-reminders.json`；overview 暴露 `feishu{enabled,configured,sent,failed,gaveUp,lastError}`；配置在 profile 层 `dsh-butler` 覆写（已启用，未发送任何测试消息）
 - [ ] 提醒闭环剩余：离线补发投递到专属会话（当前用浮层/横幅"下次打开即见"兜底）
-- [ ] 飞书正式账户/凭据迁 credentials（P3）
+- [x] 飞书凭据迁移：appSecret 已迁入 DSH `credentials`（ref `DSH_BUTLER_FEISHU_APP_SECRET`），profile patch 明文清空；新增 `POST /api/feishu-credential`（set/unset，需 confirm，写后只返回 configured/source，不回显密钥）；设置页显示密钥来源
 
 ### P2 知识闭环
 
@@ -70,7 +70,7 @@
 - [x] **备份 / 导出 / 恢复**：`POST/GET /api/backup` 快照 vault+state（跳过 cache/logs/压缩备份；每文件 SHA256 写 manifest；默认保留 5 份）；`POST /api/restore` 需 `confirm:"RESTORE"`，先校验每个文件哈希并自动生成 pre-restore 备份，校验失败不写盘；manifest 损坏的备份在列表里标 `broken` 而不是隐藏
 - [x] **设置页**（`settings.section` 席位，标题「管家」）：只读呈现时区、早报/晚报时段与补写窗口、飞书启用/已发/失败/放弃/最近错误、数据目录、压缩备份保留策略、快照列表；唯一写操作「立即备份」（本地快照）；配置本身仍归 profile 的 Cordis patch
 - [x] **用量费用日报**：`GET /api/usage-report?days=N`（1..90 天，本地时区切日、窗口补零、每日 calls/tokens/估算费用/已计价/未计价/无用量）；设置页展示近 14 天汇总 + 最近 7 天明细，明确"估算不是账单"
-- [ ] 飞书正式账户/凭据迁 credentials
+- [x] 飞书正式账户/凭据迁移（阶段一：测试应用 + credentials 存储；换正式账户只需改 appId/owner open_id 并重新写入密钥）
 
 ## 验证结果（2026-11-07 本轮，真实宿主 DSH 0.2.2-rc.1）
 

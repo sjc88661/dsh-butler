@@ -810,3 +810,34 @@ test('usage report route rolls up daily rows with explicit cost coverage', async
     assert.equal((await e.request('/dsh-butler/api/usage-report', 'POST')).status, 405)
   } finally { e.dispose() }
 })
+
+test('feishu credential route writes to the credential store without echoing the secret', async () => {
+  const calls = []
+  let stored
+  const status = () => ({ configured: stored !== undefined, writable: true, ...(stored === undefined ? {} : { source: 'store' }) })
+  const e = api({ feishuCredential: {
+    describe: async () => status(),
+    set: async secret => { calls.push(['set', secret]); stored = secret; return status() },
+    unset: async () => { calls.push(['unset']); stored = undefined; return status() },
+  } })
+  try {
+    const saved = await e.request('/dsh-butler/api/feishu-credential', 'POST', { action: 'set', confirm: 'SET', appSecret: 'super-secret-value' })
+    assert.equal(saved.status, 200)
+    assert.equal(saved.body.ok, true)
+    assert.deepEqual(saved.body.credential, { configured: true, writable: true, source: 'store' })
+    assert.deepEqual(calls, [['set', 'super-secret-value']])
+    assert.doesNotMatch(JSON.stringify(saved.body), /super-secret-value/)
+
+    assert.equal((await e.request('/dsh-butler/api/feishu-credential', 'POST', { action: 'set', confirm: 'NO', appSecret: 'super-secret-value' })).status, 400)
+    assert.equal((await e.request('/dsh-butler/api/feishu-credential', 'POST', { action: 'set', confirm: 'SET', appSecret: 'short' })).status, 400)
+    assert.equal((await e.request('/dsh-butler/api/feishu-credential', 'POST', { action: 'explode' })).status, 400)
+    const removed = await e.request('/dsh-butler/api/feishu-credential', 'POST', { action: 'unset', confirm: 'UNSET' })
+    assert.equal(removed.status, 200)
+    assert.deepEqual(removed.body.credential, { configured: false, writable: true })
+    assert.equal((await e.request('/dsh-butler/api/feishu-credential', 'GET')).status, 405)
+  } finally { e.dispose() }
+  const unsupported = api()
+  try {
+    assert.equal((await unsupported.request('/dsh-butler/api/feishu-credential', 'POST', { action: 'set', confirm: 'SET', appSecret: 'super-secret-value' })).status, 503)
+  } finally { unsupported.dispose() }
+})

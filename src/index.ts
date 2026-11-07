@@ -25,7 +25,7 @@ import { registerButlerApi, type ButlerApiContext } from './host/api.ts'
 import { addReceipt, noteToolOutcome, butlerSessionId, markInterruptedOnBoot, setButlerSessionId, setButlerSessionIds, snapshot } from './host/ledger.ts'
 import { createButlerLayer } from './host/butler-layer.ts'
 import { installLegacyToolSeriesRepair } from './host/legacy-tool-series.ts'
-import { attach, createServices } from './host/services.ts'
+import { attach, createServices, defer } from './host/services.ts'
 import {
   DEFAULT_BUTLER_SESSION_TITLE,
   type ButlerSessionOptions,
@@ -42,6 +42,7 @@ import { installUsageBackfill } from './host/backfill.ts'
 import { collectBriefSource, installDailyBrief } from './host/brief.ts'
 import { createFeishuSender } from './host/feishu.ts'
 import { createFeishuReminderWatcher, type FeishuReminderRow, type FeishuReminderWatcher } from './host/feishu-reminders.ts'
+import { clearFeishuSecret, describeFeishuSecret, resolveFeishuSecret, storeFeishuSecret, type CredentialsLike } from './host/feishu-credentials.ts'
 import { installUsageRecorder } from './host/usage.ts'
 import { TaskBudgets } from './host/budget.ts'
 import { ReminderSessions, type ReminderFactory } from './host/reminder-session.ts'
@@ -76,7 +77,7 @@ export const name = '@dsh-external/dsh-butler'
  * and `sessionTitle` is what pins the name. They are listed in `inject` because
  * a service is only visible to a fiber that declared it.
  */
-export const inject = ['tools', 'webServer', 'web', 'schedule', 'agents', 'sessions', 'sessionTitle', 'sessionQuery', 'sessionController', 'workspaceRegistry']
+export const inject = ['tools', 'webServer', 'web', 'schedule', 'credentials', 'agents', 'sessions', 'sessionTitle', 'sessionQuery', 'sessionController', 'workspaceRegistry']
 
 /** Deployment knobs; every one has a working default. */
 export interface Config {
@@ -516,18 +517,30 @@ export function apply(ctx: AppContext, config: Config): void {
 
   // Feishu self-reminder push (optional). The sender only talks to the public
   // Feishu API with the configured app, and only the owner's own open_id is a
-  // recipient. The watcher pushes butler reminder sessions only, once per
-  // occurrence, and never retries a gave-up occurrence forever.
-  const feishuSender = config.feishuEnabled === true && config.feishuAppId !== '' && config.feishuAppSecret !== ''
-    && config.feishuOwnerOpenId !== ''
-    ? createFeishuSender({ appId: config.feishuAppId ?? '', appSecret: config.feishuAppSecret ?? '', ownerOpenId: config.feishuOwnerOpenId ?? '',
-      ...(config.feishuBaseUrl === '' ? {} : { baseUrl: config.feishuBaseUrl }) })
-    : undefined
+  // recipient. The app secret is resolved from profile config first and then
+  // from the host credential store; the watcher pushes butler reminder sessions
+  // only, once per occurrence, and never retries a gave-up occurrence forever.
+  const credentials = defer<CredentialsLike>(ctx as unknown as Context, 'credentials')
+  let feishuSender: ReturnType<typeof createFeishuSender> | undefined
   let feishuWatcher: FeishuReminderWatcher | undefined
-  if (feishuSender !== undefined) {
+  let feishuStop: (() => void) | undefined
+  let feishuCredentialSource: 'config' | 'credentials' | 'none' = 'none'
+  let feishuDisposed = false
+  const startFeishu = async (): Promise<void> => {
+    if (config.feishuEnabled !== true || (config.feishuAppId ?? '') === '' || (config.feishuOwnerOpenId ?? '') === '') return
+    const resolved = await resolveFeishuSecret(config.feishuAppSecret, credentials.get())
+    feishuCredentialSource = resolved.source
+    if (feishuDisposed) return
+    if (resolved.secret === undefined) {
+      ctx.logger?.warn?.('[dsh-butler] 飞书提醒已启用，但 appSecret 既不在 profile 也不在 credentials，暂不推送')
+      return
+    }
+    const sender = createFeishuSender({ appId: config.feishuAppId ?? '', appSecret: resolved.secret, ownerOpenId: config.feishuOwnerOpenId ?? '',
+      ...(config.feishuBaseUrl === '' ? {} : { baseUrl: config.feishuBaseUrl }) })
+    feishuSender = sender
     try {
       feishuWatcher = createFeishuReminderWatcher({
-        sender: feishuSender,
+        sender,
         catalog: async (): Promise<FeishuReminderRow[]> => {
           const live = services.schedule.get()
           if (live === undefined) throw new Error(services.schedule.why() || '调度服务不可用')
@@ -544,11 +557,32 @@ export function apply(ctx: AppContext, config: Config): void {
         },
         logger: ctx.logger,
       })
-      ctx.effect(() => feishuWatcher!.install(), 'butler: feishu reminder push')
-      ctx.logger?.info?.('[dsh-butler] 飞书提醒推送已启用（只发送到配置的本人 open_id）')
+      feishuStop = feishuWatcher.install()
+      ctx.logger?.info?.('[dsh-butler] 飞书提醒推送已启用（密钥来源：%s，只发送到配置的本人 open_id）',
+        resolved.source === 'credentials' ? 'credentials' : 'profile config')
     } catch (error) {
       ctx.logger?.warn?.('[dsh-butler] 飞书提醒推送初始化失败（其余功能不受影响）：%s', String(error))
     }
+  }
+  ctx.effect(() => {
+    feishuDisposed = false
+    void startFeishu().catch(error => ctx.logger?.warn?.('[dsh-butler] 飞书提醒初始化失败：%s', String(error)))
+    return () => {
+      feishuDisposed = true
+      feishuStop?.()
+      feishuStop = undefined
+    }
+  }, 'butler: feishu reminder push')
+  const feishuCredential = {
+    describe: () => describeFeishuSecret(credentials.get()),
+    set: async (secret: string) => {
+      await storeFeishuSecret(credentials.get(), secret)
+      return await describeFeishuSecret(credentials.get())
+    },
+    unset: async () => {
+      await clearFeishuSecret(credentials.get())
+      return await describeFeishuSecret(credentials.get())
+    },
   }
 
   const disposeApi = registerButlerApi(ctx as unknown as ButlerApiContext, {
@@ -578,9 +612,11 @@ export function apply(ctx: AppContext, config: Config): void {
     feishu: () => ({
       enabled: config.feishuEnabled === true,
       configured: feishuSender !== undefined,
+      credentialSource: feishuCredentialSource,
       ...(feishuWatcher?.status() ?? {}),
       ...(feishuSender?.status().lastError === undefined ? {} : { lastError: feishuSender.status().lastError }),
     }),
+    feishuCredential,
     budgetHistory: () => {
       if (!budgets) throw new Error(`预算历史不可用：${String(budgetFailure ?? '预算服务未提供')}`)
       return budgets.history()

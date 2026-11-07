@@ -116,15 +116,22 @@ export interface ButlerApiDeps {
    * many rather than presenting them as if the feed had caught them.
    */
   usageBackfill?: () => UsageBackfillState
-  /** Optional Feishu self-reminder push status; absent means not configured. */
+  /** Feishu self-reminder status, when the host exposes it. */
   feishu?: () => {
     enabled: boolean
     configured: boolean
+    credentialSource?: 'config' | 'credentials' | 'none'
     sent?: number
     failed?: number
     gaveUp?: number
     lastError?: string
     lastTickAt?: string
+  }
+  /** Credential-store writes for the Feishu app secret (no read-back of values). */
+  feishuCredential?: {
+    describe(): Promise<{ configured: boolean; source?: string; writable: boolean }>
+    set(secret: string): Promise<{ configured: boolean; source?: string; writable: boolean }>
+    unset(): Promise<{ configured: boolean; source?: string; writable: boolean }>
   }
   runtimeControls?: () => RuntimeControlsSnapshot
   reminderOperations?: () => ReminderOperation[]
@@ -806,6 +813,37 @@ export function registerButlerApi(ctx: ButlerApiContext, deps: ButlerApiDeps): (
         const days = Number.isSafeInteger(raw) ? raw : 14
         try { sendJson(res, 200, { ok: true, ...usageReport({ days, timeZone: deps.timeZone }) }) }
         catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
+      },
+    }),
+    server.register({
+      // Move the Feishu app secret into the host credential store. The value is
+      // write-only from here on: responses describe configured state, never the
+      // secret. An explicit confirmation phrase prevents an accidental overwrite.
+      kind: 'exact',
+      path: `${API_PREFIX}/feishu-credential`,
+      handler: async (req, res) => {
+        if ((req.method ?? 'GET').toUpperCase() !== 'POST') { sendJson(res, 405, { ok: false, error: '飞书凭据只支持 POST' }); return }
+        if (deps.feishuCredential === undefined) { sendJson(res, 503, { ok: false, error: '宿主未提供 credentials 服务，不能保存飞书密钥' }); return }
+        let raw: unknown
+        try { raw = JSON.parse(await readBody(req)) } catch (error) {
+          sendJson(res, 400, { ok: false, error: `请求体不是有效 JSON：${errorText(error)}` }); return
+        }
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) { sendJson(res, 400, { ok: false, error: '请求体必须是对象' }); return }
+        const body = raw as Record<string, unknown>
+        const action = body['action']
+        try {
+          if (action === 'unset') {
+            if (body['confirm'] !== 'UNSET') { sendJson(res, 400, { ok: false, error: '删除飞书密钥需要 confirm: "UNSET"' }); return }
+            const credential = await deps.feishuCredential.unset()
+            sendJson(res, 200, { ok: true, action: 'unset', credential }); return
+          }
+          if (action !== 'set') { sendJson(res, 400, { ok: false, error: 'action 必须是 set 或 unset' }); return }
+          if (body['confirm'] !== 'SET') { sendJson(res, 400, { ok: false, error: '保存飞书密钥需要 confirm: "SET"' }); return }
+          const secret = typeof body['appSecret'] === 'string' ? body['appSecret'].trim() : ''
+          if (secret.length < 8 || secret.length > 4096) { sendJson(res, 400, { ok: false, error: '密钥长度不合法（8–4096 字符）' }); return }
+          const credential = await deps.feishuCredential.set(secret)
+          sendJson(res, 200, { ok: true, action: 'set', credential })
+        } catch (error) { sendJson(res, 503, { ok: false, error: errorText(error) }) }
       },
     }),
     server.register({

@@ -88,7 +88,9 @@ export function ButlerSettings(props: ButlerSettingsProps): unknown {
     h(KeyValue, { label: '早报', value: slotLine(settings.brief.slots.find(slot => slot.kind === 'morning')!) }),
     h(KeyValue, { label: '晚报', value: slotLine(settings.brief.slots.find(slot => slot.kind === 'evening')!) }),
     h(KeyValue, { label: '飞书提醒', value: feishu.enabled
-      ? (feishu.configured ? `已启用 · 已发送 ${feishu.sent ?? 0} · 失败 ${feishu.failed ?? 0} · 放弃 ${feishu.gaveUp ?? 0}` : '已启用但凭据不完整')
+      ? (feishu.configured
+        ? `已启用 · 已发送 ${feishu.sent ?? 0} · 失败 ${feishu.failed ?? 0} · 放弃 ${feishu.gaveUp ?? 0} · 密钥来源 ${feishu.credentialSource === 'credentials' ? 'credentials' : feishu.credentialSource === 'config' ? 'profile 配置' : '未知'}`
+        : '已启用但凭据不完整（appSecret 未配置）')
       : '未启用（配置 profile 的 dsh-butler.feishu* 后重载 bundle）' }),
     feishu.lastError === undefined ? null : h(KeyValue, { label: '飞书最近错误', value: feishu.lastError, tone: 'warn' }),
     h(KeyValue, { label: '数据目录', value: settings.data.vaultHome }),
